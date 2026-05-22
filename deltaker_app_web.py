@@ -4,12 +4,16 @@ import random
 from pathlib import Path
 from datetime import datetime
 
+# Konfigurasjon og faste stier
 DATA_FILE = Path("sportsfestival_data.csv")
 LOGG_FILE = Path("sportsfestival_logg.csv")
+SETTING_FILE = Path("sportsfestival_innstillinger.csv")
+
 KATEGORIER = ["Elev", "நிர்வாகம்", "Lærer", "Frivillig", "Gjest"]
 LAG_A = "Lag Rød"
 LAG_B = "Lag Gul"
 
+# Sideoppsett for Streamlit
 st.set_page_config(
     page_title="Sportsfestival 2026",
     page_icon="🏆",
@@ -17,9 +21,33 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
+# Initialisering av databehandler direkte i sesjonsminnet
 if "kolonner" not in st.session_state:
     st.session_state.kolonner = ["ID", "Navn", "Kategori", "Kull", "Lag"]
     st.session_state.logg_kolonner = ["Tidspunkt", "Handling", "Detaljer"]
+
+def last_inn_innstillinger():
+    standard = {
+        "passord": "Admin2026",
+        "las_nullstill": "True",
+        "las_autofordel": "True",
+        "las_import": "False",
+        "las_slett_enkel": "False"
+    }
+    if SETTING_FILE.exists():
+        try:
+            df = pd.read_csv(SETTING_FILE, dtype=str)
+            return dict(zip(df["Nøkkel"], df["Verdi"]))
+        except Exception:
+            pass
+    return standard
+
+def lagre_innstillinger():
+    try:
+        data = {"Nøkkel": list(st.session_state.innstillinger.keys()), "Verdi": list(st.session_state.innstillinger.values())}
+        pd.DataFrame(data).to_csv(SETTING_FILE, index=False, encoding="utf-8-sig")
+    except Exception as e:
+        st.error(f"Kunne ikke lagre innstillinger: {e}")
 
 def last_inn_data():
     if DATA_FILE.exists():
@@ -37,6 +65,11 @@ def last_inn_logg():
             pass
     return pd.DataFrame(columns=st.session_state.logg_kolonner)
 
+# Sjekk og klargjør sesjonsdata
+if "innstillinger" not in st.session_state:
+    st.session_state.innstillinger = last_inn_innstillinger()
+if "is_admin" not in st.session_state:
+    st.session_state.is_admin = False
 if "df" not in st.session_state:
     st.session_state.df = last_inn_data()
 if "logg_df" not in st.session_state:
@@ -68,12 +101,24 @@ def finn_laveste_ledige_id():
         ny_id += 1
     return ny_id
 
+def har_tilgang(nokkel):
+    if st.session_state.innstillinger.get(nokkel, "False") == "True":
+        return st.session_state.is_admin
+    return True
+
+# Sidemeny for mobil- og PC-navigasjon
 st.sidebar.title("🏆 Sportsfestival")
 st.sidebar.write("Admin System 2026")
-side = st.sidebar.radio("Navigasjon", ["📋 Registrering", "🏁 Laginndeling", "📊 Informasjon", "📜 Historikk"])
+side = st.sidebar.radio("Navigasjon", ["📋 Registrering", "🏁 Laginndeling", "📊 Informasjon", "📜 Historikk", "⚙️ Admin-meny"])
 
 st.sidebar.markdown("---")
-st.sidebar.markdown("🟢 **Status:** Alt er synkronisert og lagret")
+if st.session_state.is_admin:
+    st.sidebar.markdown("🔓 **Status:** Innlogget som Administrator")
+    if st.sidebar.button("🔒 Logg ut av admin"):
+        st.session_state.is_admin = False
+        st.rerun()
+else:
+    st.sidebar.markdown("🟢 **Status:** Begrenset brukermodus")
 
 if side == "📋 Registrering":
     st.title("Deltakerregistrering")
@@ -131,7 +176,9 @@ if side == "📋 Registrering":
                         st.success("Endringene ble lagret.")
                         st.rerun()
             with kol2:
-                if st.button("🗑️ Slett deltaker permanent", type="primary", use_container_width=True):
+                tilgang_slett = har_tilgang("las_slett_enkel")
+                slett_tekst = "🗑️ Slett deltaker permanent" if tilgang_slett else "🗑️ Slett deltaker (Krever admin)"
+                if st.button(slett_tekst, type="primary", disabled=not tilgang_slett, use_container_width=True):
                     slettet_navn = st.session_state.df.at[idx, "Navn"]
                     st.session_state.df = st.session_state.df[st.session_state.df["ID"] != valgt_id].reset_index(drop=True)
                     loggfor_handling("Slettet", f"ID {valgt_id}: {slettet_navn}")
@@ -140,9 +187,12 @@ if side == "📋 Registrering":
                         st.rerun()
 
     st.markdown("---")
-    st.subheader("Filimport (Beskyttet mot duplikater)")
-    opplastet_fil = st.file_uploader("Last opp Excel eller CSV for å hente inn deltakere", type=["csv", "xlsx"])
-    if opplastet_fil:
+    st.subheader("Filimport")
+    tilgang_import = har_tilgang("las_import")
+    if not tilgang_import:
+        st.info("Filimport er låst. Vennligst logg inn i Admin-menyen for å aktivere denne funksjonen.")
+    opplastet_fil = st.file_uploader("Last opp Excel eller CSV for å hente inn deltakere", type=["csv", "xlsx"], disabled=not tilgang_import)
+    if opplastet_fil and tilgang_import:
         try:
             if opplastet_fil.name.endswith(".xlsx"):
                 ny_df = pd.read_excel(opplastet_fil, dtype=str).fillna("")
@@ -206,11 +256,9 @@ if side == "📋 Registrering":
     st.write("Skann systemet for å fjerne personer som ligger inne flere ganger ved en feil.")
     if st.button("Fjern duplikater i systemet automatisk"):
         originalt_antall = len(st.session_state.df)
-        
         midlertidig_df = st.session_state.df.copy()
         midlertidig_df["Soke_nokkel"] = midlertidig_df["Navn"].str.lower().str.strip() + midlertidig_df["Kategori"]
         midlertidig_df = midlertidig_df.drop_duplicates(subset=["Soke_nokkel"], keep="first")
-        
         st.session_state.df = midlertidig_df.drop(columns=["Soke_nokkel"]).reset_index(drop=True)
         nytt_antall = len(st.session_state.df)
         forskjell = originalt_antall - nytt_antall
@@ -225,10 +273,12 @@ if side == "📋 Registrering":
 
     st.markdown("---")
     st.subheader("🚨 Faresone - Nullstill systemet fullstendig")
-    st.write("Dette vil slette absolutt alle registrerte personer, fjerne alle laginndelinger og tømme hele historikken permanent.")
+    tilgang_nullstill = har_tilgang("las_nullstill")
+    if not tilgang_nullstill:
+        st.info("Full systemnullstilling er låst bak admin-tilgang.")
     
-    bekreft_sletting = st.checkbox("Jeg bekrefter at jeg vil slette alt av data og historikk permanent.")
-    if st.button("🔥 Slett alle deltakere og resette alt", type="primary", disabled=not bekreft_sletting, use_container_width=True):
+    bekreft_sletting = st.checkbox("Jeg bekrefter at jeg vil slette alt av data og historikk permanent.", disabled=not tilgang_nullstill)
+    if st.button("🔥 Slett alle deltakere og resette alt", type="primary", disabled=not (bekreft_sletting and tilgang_nullstill), use_container_width=True):
         st.session_state.df = pd.DataFrame(columns=st.session_state.kolonner)
         st.session_state.logg_df = pd.DataFrame(columns=st.session_state.logg_kolonner)
         loggfor_handling("Systemnullstilling", "Absolutt alt av deltakerdata og historikk ble slettet av administrator.")
@@ -239,9 +289,12 @@ if side == "📋 Registrering":
 elif side == "🏁 Laginndeling":
     st.title("Laginndeling og balansering")
     
+    tilgang_fordel = har_tilgang("las_autofordel")
+    
     b_kol1, b_kol2, b_kol3, b_kol4 = st.columns(4)
     with b_kol1:
-        if st.button("✨ Auto-fordel ufordelte", use_container_width=True):
+        autofordel_tekst = "✨ Auto-fordel ufordelte" if tilgang_fordel else "✨ Auto-fordel (Admin)"
+        if st.button(autofordel_tekst, disabled=not tilgang_fordel, use_container_width=True):
             ufordelte = st.session_state.df[(st.session_state.df["Kategori"] == "Elev") & (st.session_state.df["Lag"] == "")]
             if ufordelte.empty:
                 st.info("Ingen ufordelte elever ble funnet.")
@@ -263,7 +316,8 @@ elif side == "🏁 Laginndeling":
                 st.rerun()
                 
     with b_kol2:
-        if st.button("⚠️ Nullstill og fordel alle", use_container_width=True):
+        omfordel_tekst = "⚠️ Nullstill og fordel alle" if tilgang_fordel else "⚠️ Omgjør lag (Admin)"
+        if st.button(omfordel_tekst, disabled=not tilgang_fordel, use_container_width=True):
             elever = st.session_state.df[st.session_state.df["Kategori"] == "Elev"].copy()
             indekser = elever.index.tolist()
             random.shuffle(indekser)
@@ -360,3 +414,52 @@ elif side == "📜 Historikk":
     st.title("Systemhistorikk og endringslogg")
     st.write("Her logges alle endringer som gjøres i systemet automatisk for full kontroll over tildelte ID-er og lagendringer.")
     st.dataframe(st.session_state.logg_df, use_container_width=True, hide_index=True)
+
+elif side == "⚙️ Admin-meny":
+    st.title("⚙️ Kontrollpanel for Administrator")
+    
+    if not st.session_state.is_admin:
+        st.subheader("Sikkerhetsinnlogging")
+        passord_input = st.text_input("Vennligst oppgi admin-passord for å låse opp innstillinger", type="password")
+        if st.button("Lås opp meny"):
+            if passord_input == st.session_state.innstillinger["passord"]:
+                st.session_state.is_admin = True
+                st.success("Innlogging godkjent. Rettigheter aktivert.")
+                st.rerun()
+            else:
+                st.error("Ugyldig passord. Vennligst prøv igjen.")
+    else:
+        st.success("🔒 Du har full administratortilgang.")
+        
+        st.markdown("---")
+        st.subheader("Rettigheter og adgangskontroll")
+        st.write("Velg hvilke funksjoner som skal kreve admin-passord for å kunne brukes:")
+        
+        # Bruker tekstbaserte verdier ("True"/"False") for stabil lagring i CSV
+        c_nullstill = st.checkbox("Lås full systemnullstilling (Faresone)", value=(st.session_state.innstillinger["las_nullstill"] == "True"))
+        c_autofordel = st.checkbox("Lås automatisk lagfordeling og balansering", value=(st.session_state.innstillinger["las_autofordel"] == "True"))
+        c_import = st.checkbox("Lås filimport fra Excel/CSV", value=(st.session_state.innstillinger["las_import"] == "True"))
+        c_slett = st.checkbox("Lås sletting av enkelt-deltakere", value=(st.session_state.innstillinger["las_slett_enkel"] == "True"))
+        
+        if st.button("💾 Lagre konfigurasjon"):
+            st.session_state.innstillinger["las_nullstill"] = "True" if c_nullstill else "False"
+            st.session_state.innstillinger["las_autofordel"] = "True" if c_autofordel else "False"
+            st.session_state.innstillinger["las_import"] = "True" if c_import else "False"
+            st.session_state.innstillinger["las_slett_enkel"] = "True" if c_slett else "False"
+            lagre_innstillinger()
+            st.success("Rettighetsmatrisen ble oppdatert og lagret!")
+            
+        st.markdown("---")
+        st.subheader("Endre administratorpassord")
+        nytt_passord = st.text_input("Skriv inn nytt master-passord", type="password")
+        gjenta_passord = st.text_input("Gjenta det nye master-passordet", type="password")
+        
+        if st.button("Oppdater passord"):
+            if not nytt_passord.strip():
+                st.warning("Passordet kan ikke være tomt.")
+            elif nytt_passord != gjenta_passord:
+                st.error("Passordene er ikke like.")
+            else:
+                st.session_state.innstillinger["passord"] = nytt_passord.strip()
+                lagre_innstillinger()
+                st.success("Admin-passordet ble endret!")
