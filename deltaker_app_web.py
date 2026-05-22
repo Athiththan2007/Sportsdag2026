@@ -4,14 +4,12 @@ import random
 from pathlib import Path
 from datetime import datetime
 
-# Konfigurasjon og faste stier
 DATA_FILE = Path("sportsfestival_data.csv")
 LOGG_FILE = Path("sportsfestival_logg.csv")
 KATEGORIER = ["Elev", "நிர்வாகம்", "Lærer", "Frivillig", "Gjest"]
 LAG_A = "Lag Rød"
 LAG_B = "Lag Gul"
 
-# Sideoppsett for Streamlit
 st.set_page_config(
     page_title="Sportsfestival 2026",
     page_icon="🏆",
@@ -19,7 +17,6 @@ st.set_page_config(
     initial_sidebar_state="expanded"
 )
 
-# Initialisering av databehandler direkte i sesjonsminnet
 if "kolonner" not in st.session_state:
     st.session_state.kolonner = ["ID", "Navn", "Kategori", "Kull", "Lag"]
     st.session_state.logg_kolonner = ["Tidspunkt", "Handling", "Detaljer"]
@@ -57,7 +54,7 @@ def lagre_alle_data():
 def loggfor_handling(handling, detaljer):
     tid = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     ny_rad = pd.DataFrame([[tid, handling, detaljer]], columns=st.session_state.logg_kolonner)
-    st.session_state.logg_df = pd.concat([ny_rad], ignore_index=True)
+    st.session_state.logg_df = pd.concat([ny_rad, st.session_state.logg_df], ignore_index=True)
 
 def finn_laveste_ledige_id():
     eksisterende = []
@@ -71,7 +68,6 @@ def finn_laveste_ledige_id():
         ny_id += 1
     return ny_id
 
-# Sidemeny for mobil- og PC-navigasjon
 st.sidebar.title("🏆 Sportsfestival")
 st.sidebar.write("Admin System 2026")
 side = st.sidebar.radio("Navigasjon", ["📋 Registrering", "🏁 Laginndeling", "📊 Informasjon", "📜 Historikk"])
@@ -97,7 +93,7 @@ if side == "📋 Registrering":
                 else:
                     ny_id_num = finn_laveste_ledige_id()
                     if ny_id_num > 99:
-                        st.error("Maksgrensen på 99 deltakereer nådd.")
+                        st.error("Maksgrensen på 99 deltakere er nådd.")
                     else:
                         ny_id_str = f"{ny_id_num:02d}"
                         kull_verdi = kull.strip() if kategori == "Elev" else ""
@@ -144,7 +140,7 @@ if side == "📋 Registrering":
                         st.rerun()
 
     st.markdown("---")
-    st.subheader("Filimport (Valgfritt)")
+    st.subheader("Filimport (Beskyttet mot duplikater)")
     opplastet_fil = st.file_uploader("Last opp Excel eller CSV for å hente inn deltakere", type=["csv", "xlsx"])
     if opplastet_fil:
         try:
@@ -153,23 +149,32 @@ if side == "📋 Registrering":
             else:
                 ny_df = pd.read_csv(opplastet_fil, dtype=str).fillna("")
             
+            eksisterende_navn = set(st.session_state.df["Navn"].str.lower().str.strip())
             importert_teller = 0
+            hoppet_over_teller = 0
+            
             for _, rad in ny_df.iterrows():
-                importert_navn = rad.get("Navn", "")
+                importert_navn = rad.get("Navn", "").strip()
                 if importert_navn:
+                    navn_sjekk = importert_navn.lower()
+                    if navn_sjekk in eksisterende_navn:
+                        hoppet_over_teller += 1
+                        continue
+                        
                     neste_id = finn_laveste_ledige_id()
                     if neste_id <= 99:
                         neste_id_str = f"{neste_id:02d}"
                         importert_kat = rad.get("Kategori", "Elev")
                         importert_kull = rad.get("Kull", "") if importert_kat == "Elev" else ""
-                        midlertidig_rad = pd.DataFrame([[neste_id_str, importert_navn.strip(), importert_kat, importert_kull, ""]], columns=st.session_state.kolonner)
+                        midlertidig_rad = pd.DataFrame([[neste_id_str, importert_navn, importert_kat, importert_kull, ""]], columns=st.session_state.kolonner)
                         st.session_state.df = pd.concat([st.session_state.df, midlertidig_rad], ignore_index=True)
+                        eksisterende_navn.add(navn_sjekk)
                         importert_teller += 1
             
-            if importert_teller > 0:
-                loggfor_handling("Import", f"Importerte {importert_teller} deltakere eksternt")
+            if importert_teller > 0 or hoppet_over_teller > 0:
+                loggfor_handling("Import", f"Importerte {importert_teller} nye. Ignorerte {hoppet_over_teller} duplikater.")
                 lagre_alle_data()
-                st.success(f"Vellykket import av {importert_teller} deltakere.")
+                st.success(f"Vellykket import. La til {importert_teller} nye personer og hoppet over {hoppet_over_teller} duplikater.")
                 st.rerun()
         except Exception as e:
             st.error(f"Kunne ikke tolke filen: {e}")
@@ -196,7 +201,28 @@ if side == "📋 Registrering":
         st.session_state.logg_df = last_inn_logg()
         st.rerun()
 
-    # ── NY FUNKSJON: DETONASJONS-KNAPP FOR SYSTEMRESET ──
+    st.markdown("---")
+    st.subheader("🧹 Opprydding og sikkerhetssjekk")
+    st.write("Skann systemet for å fjerne personer som ligger inne flere ganger ved en feil.")
+    if st.button("Fjern duplikater i systemet automatisk"):
+        originalt_antall = len(st.session_state.df)
+        
+        midlertidig_df = st.session_state.df.copy()
+        midlertidig_df["Soke_nokkel"] = midlertidig_df["Navn"].str.lower().str.strip() + midlertidig_df["Kategori"]
+        midlertidig_df = midlertidig_df.drop_duplicates(subset=["Soke_nokkel"], keep="first")
+        
+        st.session_state.df = midlertidig_df.drop(columns=["Soke_nokkel"]).reset_index(drop=True)
+        nytt_antall = len(st.session_state.df)
+        forskjell = originalt_antall - nytt_antall
+        
+        if forskjell > 0:
+            loggfor_handling("Opprydding", f"Fjernet {forskjell} duplikater automatisk.")
+            lagre_alle_data()
+            st.success(f"Skanning fullført. Fjernet {forskjell} dupliserte registreringer.")
+        else:
+            st.info("Skanning fullført. Ingen duplikater ble funnet.")
+        st.rerun()
+
     st.markdown("---")
     st.subheader("🚨 Faresone - Nullstill systemet fullstendig")
     st.write("Dette vil slette absolutt alle registrerte personer, fjerne alle laginndelinger og tømme hele historikken permanent.")
@@ -328,7 +354,7 @@ elif side == "📊 Informasjon":
     st.subheader("Komplett fordeling fordelt på roller")
     for kat in KATEGORIER:
         antall_kat = kategoritelling.get(kat, 0)
-        st.write(f"• **{kat}:** {antall_kat} personer")
+        st.write(f"Kategori {kat}: {antall_kat} personer")
 
 elif side == "📜 Historikk":
     st.title("Systemhistorikk og endringslogg")
