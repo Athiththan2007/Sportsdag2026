@@ -136,7 +136,7 @@ if side == "📋 Registrering":
                         st.success("Endringene ble lagret.")
                         st.rerun()
             with kol2:
-                if st.button("🗑️ Slett deltaker permanent", fg_color="red", use_container_width=True):
+                if st.button("🗑️ Slett deltaker permanent", type="primary", use_container_width=True):
                     slettet_navn = st.session_state.df.at[idx, "Navn"]
                     st.session_state.df = st.session_state.df[st.session_state.df["ID"] != valgt_id].reset_index(drop=True)
                     loggfor_handling("Slettet", f"ID {valgt_id}: {slettet_navn}")
