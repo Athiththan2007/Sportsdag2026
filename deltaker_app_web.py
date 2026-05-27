@@ -1,16 +1,12 @@
 import streamlit as st
 import pandas as pd
 import random
-from pathlib import Path
+import io
 from datetime import datetime
-
-# Konfigurasjon og faste stier
-DATA_FILE = Path("sportsfestival_data.csv")
-LOGG_FILE = Path("sportsfestival_logg.csv")
-SETTING_FILE = Path("sportsfestival_innstillinger.csv")
-POENG_FILE = Path("sportsfestival_poeng.csv")
+from github import Github
 
 KATEGORIER = ["Elev", "நிர்வாகம்", "Lærer", "Frivillig", "Gjest"]
+AVDELINGER = ["Ålesund", "Ulsteinvik", "Florø"]
 LAG_A = "Lag Rød"
 LAG_B = "Lag Gul"
 
@@ -22,9 +18,35 @@ st.set_page_config(
 )
 
 if "kolonner" not in st.session_state:
-    st.session_state.kolonner = ["ID", "Navn", "Kategori", "Kull", "Kjønn", "Lag"]
+    st.session_state.kolonner = ["ID", "Navn", "Kategori", "Kull", "Kjønn", "Avdeling", "Lag"]
     st.session_state.logg_kolonner = ["Tidspunkt", "Rolle", "Handling", "Detaljer"]
     st.session_state.poeng_kolonner = ["ID", "Øvelse 1", "Øvelse 2", "Øvelse 3"]
+
+def les_fra_github(filnavn):
+    try:
+        g = Github(st.secrets["GITHUB_TOKEN"])
+        repo = g.get_repo(st.secrets["GITHUB_REPO"])
+        file = repo.get_contents(filnavn)
+        innhold = file.decoded_content.decode("utf-8")
+        return pd.read_csv(io.StringIO(innhold), dtype=str)
+    except Exception:
+        return pd.DataFrame()
+
+def lagre_til_github(df, filnavn):
+    try:
+        g = Github(st.secrets["GITHUB_TOKEN"])
+        repo = g.get_repo(st.secrets["GITHUB_REPO"])
+        csv_data = df.to_csv(index=False, encoding="utf-8-sig")
+        
+        try:
+            file = repo.get_contents(filnavn)
+            repo.update_file(file.path, f"Oppdaterer {filnavn}", csv_data, file.sha)
+        except Exception:
+            repo.create_file(filnavn, f"Oppretter {filnavn}", csv_data)
+        return True
+    except Exception as e:
+        st.error(f"Feil ved lagring av {filnavn}: {e}")
+        return False
 
 def last_inn_innstillinger():
     standard = {
@@ -35,52 +57,44 @@ def last_inn_innstillinger():
         "las_slett_enkel": "False",
         "las_poengforing": "True"
     }
-    if SETTING_FILE.exists():
+    df = les_fra_github("sportsfestival_innstillinger.csv")
+    if not df.empty:
         try:
-            df = pd.read_csv(SETTING_FILE, dtype=str)
             lagrede = dict(zip(df["Nøkkel"], df["Verdi"]))
             standard.update(lagrede)
-            return standard
         except Exception:
             pass
     return standard
 
 def lagre_innstillinger():
-    try:
-        data = {"Nøkkel": list(st.session_state.innstillinger.keys()), "Verdi": list(st.session_state.innstillinger.values())}
-        pd.DataFrame(data).to_csv(SETTING_FILE, index=False, encoding="utf-8-sig")
-    except Exception as e:
-        st.error(f"Kunne ikke lagre innstillinger: {e}")
+    data = {"Nøkkel": list(st.session_state.innstillinger.keys()), "Verdi": list(st.session_state.innstillinger.values())}
+    df = pd.DataFrame(data)
+    lagre_til_github(df, "sportsfestival_innstillinger.csv")
 
 def last_inn_data():
-    if DATA_FILE.exists():
-        try:
-            df = pd.read_csv(DATA_FILE, encoding="utf-8-sig", dtype=str).fillna("")
-            if "Kjønn" not in df.columns:
-                df["Kjønn"] = ""
-            return df
-        except Exception:
-            pass
+    df = les_fra_github("sportsfestival_data.csv")
+    if not df.empty:
+        df = df.fillna("")
+        if "Kjønn" not in df.columns:
+            df["Kjønn"] = ""
+        if "Avdeling" not in df.columns:
+            df["Avdeling"] = "Ålesund"
+        return df
     return pd.DataFrame(columns=st.session_state.kolonner)
 
 def last_inn_logg():
-    if LOGG_FILE.exists():
-        try:
-            df = pd.read_csv(LOGG_FILE, encoding="utf-8-sig", dtype=str).fillna("")
-            # Bakoverkompatibilitet: legg til Rolle-kolonne hvis den mangler
-            if "Rolle" not in df.columns:
-                df.insert(1, "Rolle", "—")
-            return df
-        except Exception:
-            pass
+    df = les_fra_github("sportsfestival_logg.csv")
+    if not df.empty:
+        df = df.fillna("")
+        if "Rolle" not in df.columns:
+            df.insert(1, "Rolle", "—")
+        return df
     return pd.DataFrame(columns=st.session_state.logg_kolonner)
 
 def last_inn_poeng():
-    if POENG_FILE.exists():
-        try:
-            return pd.read_csv(POENG_FILE, encoding="utf-8-sig", dtype=str).fillna("0")
-        except Exception:
-            pass
+    df = les_fra_github("sportsfestival_poeng.csv")
+    if not df.empty:
+        return df.fillna("0")
     return pd.DataFrame(columns=st.session_state.poeng_kolonner)
 
 if "innstillinger" not in st.session_state:
@@ -95,14 +109,11 @@ if "poeng_df" not in st.session_state:
     st.session_state.poeng_df = last_inn_poeng()
 
 def lagre_alle_data():
-    try:
-        st.session_state.df.to_csv(DATA_FILE, index=False, encoding="utf-8-sig")
-        st.session_state.logg_df.to_csv(LOGG_FILE, index=False, encoding="utf-8-sig")
-        st.session_state.poeng_df.to_csv(POENG_FILE, index=False, encoding="utf-8-sig")
-        return True
-    except Exception as e:
-        st.error(f"Kunne ikke lagre til filen akkurat nå: {e}")
-        return False
+    with st.spinner("Synkroniserer endringer med GitHub..."):
+        s1 = lagre_til_github(st.session_state.df, "sportsfestival_data.csv")
+        s2 = lagre_til_github(st.session_state.logg_df, "sportsfestival_logg.csv")
+        s3 = lagre_til_github(st.session_state.poeng_df, "sportsfestival_poeng.csv")
+        return s1 and s2 and s3
 
 def loggfor_handling(handling, detaljer):
     tid = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
@@ -118,7 +129,7 @@ def finn_laveste_ledige_id():
         except ValueError:
             pass
     ny_id = 1
-    while ny_id in eksisterende and ny_id < 100:
+    while ny_id in eksisterende and ny_id < 1000:
         ny_id += 1
     return ny_id
 
@@ -126,8 +137,6 @@ def har_tilgang(nokkel):
     if str(st.session_state.innstillinger.get(nokkel, "False")) == "True":
         return st.session_state.is_admin
     return True
-
-# ── Sidemeny ────────────────────────────────────────────────────────────────
 
 st.sidebar.title("🏆 Sportsfestival")
 st.sidebar.write("Admin System 2026")
@@ -149,11 +158,6 @@ if st.session_state.is_admin:
 else:
     st.sidebar.markdown("🟢 **Status:** Begrenset brukermodus")
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  📋 REGISTRERING
-# ═════════════════════════════════════════════════════════════════════════════
-
 if side == "📋 Registrering":
     st.title("Deltakerregistrering")
     
@@ -163,6 +167,7 @@ if side == "📋 Registrering":
         with st.form("ny_deltaker_form", clear_on_submit=True):
             navn = st.text_input("Fullt navn")
             kategori = st.selectbox("Kategori", KATEGORIER)
+            avdeling = st.selectbox("Avdeling", AVDELINGER)
             
             kol1, kol2 = st.columns(2)
             with kol1:
@@ -177,32 +182,30 @@ if side == "📋 Registrering":
                     st.warning("Navn er et påkrevd felt.")
                 else:
                     ny_id_num = finn_laveste_ledige_id()
-                    if ny_id_num > 99:
-                        st.error("Maksgrensen på 99 deltakere er nådd.")
-                    else:
-                        ny_id_str = f"{ny_id_num:02d}"
-                        kull_verdi = kull.strip() if kategori == "Elev" else ""
-                        kjonn_verdi = kjonn if kategori == "Elev" else ""
-                        ny_rad = pd.DataFrame([[ny_id_str, navn.strip(), kategori, kull_verdi, kjonn_verdi, ""]], columns=st.session_state.kolonner)
-                        st.session_state.df = pd.concat([st.session_state.df, ny_rad], ignore_index=True)
-                        loggfor_handling("Lagt til", f"ID {ny_id_str}: {navn} ({kategori})")
-                        if lagre_alle_data():
-                            st.success(f"{navn} ble lagt til med ID {ny_id_str}")
-                            st.rerun()
+                    ny_id_str = f"{ny_id_num:02d}"
+                    kull_verdi = kull.strip() if kategori == "Elev" else ""
+                    kjonn_verdi = kjonn if kategori == "Elev" else ""
+                    ny_rad = pd.DataFrame([[ny_id_str, navn.strip(), kategori, kull_verdi, kjonn_verdi, avdeling, ""]], columns=st.session_state.kolonner)
+                    st.session_state.df = pd.concat([st.session_state.df, ny_rad], ignore_index=True)
+                    loggfor_handling("Lagt til", f"ID {ny_id_str}: {navn} ({avdeling})")
+                    if lagre_alle_data():
+                        st.success(f"{navn} ble lagt til med ID {ny_id_str} ({avdeling})")
+                        st.rerun()
 
     else:
         if st.session_state.df.empty:
             st.info("Det er ingen registrerte deltakere i systemet ennå.")
         else:
-            deltaker_valg = st.selectbox(
-                "Velg deltaker som skal behandles",
-                st.session_state.df["ID"] + " - " + st.session_state.df["Navn"]
-            )
+            deltaker_valg = st.selectbox("Velg deltaker som skal behandles", st.session_state.df["ID"] + " - " + st.session_state.df["Navn"])
             valgt_id = deltaker_valg.split(" - ")[0]
             idx = st.session_state.df.index[st.session_state.df["ID"] == valgt_id].tolist()[0]
             
             oppdatert_navn = st.text_input("Navn", st.session_state.df.at[idx, "Navn"])
             oppdatert_kat = st.selectbox("Kategori", KATEGORIER, index=KATEGORIER.index(st.session_state.df.at[idx, "Kategori"]))
+            
+            na_avd = st.session_state.df.at[idx, "Avdeling"]
+            if na_avd not in AVDELINGER: na_avd = "Ålesund"
+            oppdatert_avd = st.selectbox("Avdeling", AVDELINGER, index=AVDELINGER.index(na_avd))
             
             kol_e1, kol_e2 = st.columns(2)
             with kol_e1:
@@ -220,11 +223,12 @@ if side == "📋 Registrering":
                     gammelt_navn = st.session_state.df.at[idx, "Navn"]
                     st.session_state.df.at[idx, "Navn"] = oppdatert_navn.strip()
                     st.session_state.df.at[idx, "Kategori"] = oppdatert_kat
+                    st.session_state.df.at[idx, "Avdeling"] = oppdatert_avd
                     st.session_state.df.at[idx, "Kull"] = oppdatert_kull.strip() if oppdatert_kat == "Elev" else ""
                     st.session_state.df.at[idx, "Kjønn"] = oppdatert_kjonn if oppdatert_kat == "Elev" else ""
-                    loggfor_handling("Oppdatert", f"ID {valgt_id}: {gammelt_navn} endret til {oppdatert_navn}")
+                    loggfor_handling("Oppdatert", f"ID {valgt_id}: {gammelt_navn} endret.")
                     if lagre_alle_data():
-                        st.success("Endringene ble lagret.")
+                        st.success("Endringene ble lagret i skyen.")
                         st.rerun()
             with kol2:
                 tilgang_slett = har_tilgang("las_slett_enkel")
@@ -235,7 +239,7 @@ if side == "📋 Registrering":
                     st.session_state.poeng_df = st.session_state.poeng_df[st.session_state.poeng_df["ID"] != valgt_id].reset_index(drop=True)
                     loggfor_handling("Slettet", f"ID {valgt_id}: {slettet_navn}")
                     if lagre_alle_data():
-                        st.success("Deltakeren ble slettet.")
+                        st.success("Deltakeren ble slettet fra databasen.")
                         st.rerun()
 
     st.markdown("---")
@@ -264,15 +268,17 @@ if side == "📋 Registrering":
                         continue
                         
                     neste_id = finn_laveste_ledige_id()
-                    if neste_id <= 99:
-                        neste_id_str = f"{neste_id:02d}"
-                        importert_kat = rad.get("Kategori", "Elev")
-                        importert_kull = rad.get("Kull", "") if importert_kat == "Elev" else ""
-                        importert_kjonn = rad.get("Kjønn", "") if importert_kat == "Elev" else ""
-                        midlertidig_rad = pd.DataFrame([[neste_id_str, importert_navn, importert_kat, importert_kull, importert_kjonn, ""]], columns=st.session_state.kolonner)
-                        st.session_state.df = pd.concat([st.session_state.df, midlertidig_rad], ignore_index=True)
-                        eksisterende_navn.add(navn_sjekk)
-                        importert_teller += 1
+                    neste_id_str = f"{neste_id:02d}"
+                    importert_kat = rad.get("Kategori", "Elev")
+                    importert_avd = rad.get("Avdeling", "Ålesund")
+                    if importert_avd not in AVDELINGER: importert_avd = "Ålesund"
+                    importert_kull = rad.get("Kull", "") if importert_kat == "Elev" else ""
+                    importert_kjonn = rad.get("Kjønn", "") if importert_kat == "Elev" else ""
+                    
+                    midlertidig_rad = pd.DataFrame([[neste_id_str, importert_navn, importert_kat, importert_kull, importert_kjonn, importert_avd, ""]], columns=st.session_state.kolonner)
+                    st.session_state.df = pd.concat([st.session_state.df, midlertidig_rad], ignore_index=True)
+                    eksisterende_navn.add(navn_sjekk)
+                    importert_teller += 1
             
             if importert_teller > 0 or hoppet_over_teller > 0:
                 loggfor_handling("Import", f"Importerte {importert_teller} nye. Ignorerte {hoppet_over_teller} duplikater.")
@@ -284,7 +290,7 @@ if side == "📋 Registrering":
 
     st.markdown("---")
     st.subheader("Globalt søk og oversikt")
-    sok_tekst = st.text_input("Søk i sanntid på tvers av ID, navn, kull, kategori eller lag")
+    sok_tekst = st.text_input("Søk i sanntid på tvers av ID, navn, kull, kategori, lag eller avdeling")
     
     if sok_tekst.strip():
         filtrert_df = st.session_state.df[
@@ -292,6 +298,7 @@ if side == "📋 Registrering":
             st.session_state.df["Navn"].str.contains(sok_tekst, case=False, na=False) |
             st.session_state.df["Kategori"].str.contains(sok_tekst, case=False, na=False) |
             st.session_state.df["Kull"].str.contains(sok_tekst, case=False, na=False) |
+            st.session_state.df["Avdeling"].str.contains(sok_tekst, case=False, na=False) |
             st.session_state.df["Lag"].str.contains(sok_tekst, case=False, na=False)
         ]
     else:
@@ -299,7 +306,7 @@ if side == "📋 Registrering":
 
     st.dataframe(filtrert_df, use_container_width=True, hide_index=True)
 
-    if st.button("🔄 Tving manuell filoppdatering"):
+    if st.button("🔄 Tving filoppdatering fra skyen"):
         st.session_state.df = last_inn_data()
         st.session_state.logg_df = last_inn_logg()
         st.session_state.poeng_df = last_inn_poeng()
@@ -340,16 +347,11 @@ if side == "📋 Registrering":
             st.success("Hele systemet har blitt nullstilt og tømt!")
             st.rerun()
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  🏁 LAGINNDELING
-# ═════════════════════════════════════════════════════════════════════════════
-
 elif side == "🏁 Laginndeling":
     st.title("Laginndeling og balansering")
     tilgang_fordel = har_tilgang("las_autofordel")
     
-    b_kol1, b_kol2, b_kol3, b_kol4 = st.columns(4)
+    b_kol1, b_kol2 = st.columns(2)
     with b_kol1:
         autofordel_tekst = "✨ Auto-fordel ufordelte" if tilgang_fordel else "✨ Auto-fordel (Admin)"
         if st.button(autofordel_tekst, disabled=not tilgang_fordel, use_container_width=True):
@@ -387,21 +389,6 @@ elif side == "🏁 Laginndeling":
             lagre_alle_data()
             st.rerun()
 
-    with b_kol3:
-        csv_data = st.session_state.df[st.session_state.df["Lag"] != ""].to_csv(index=False, encoding="utf-8-sig")
-        st.download_button("💾 Last ned CSV-eksport", data=csv_data, file_name="lagfordeling_eksport.csv", mime="text/csv", use_container_width=True)
-
-    with b_kol4:
-        df_a_print = st.session_state.df[st.session_state.df["Lag"] == LAG_A]
-        df_b_print = st.session_state.df[st.session_state.df["Lag"] == LAG_B]
-        html_print = f"""
-        <html><body style='font-family:Arial;padding:20px;'>
-        <h2>{LAG_A}</h2><ul>{"".join(f"<li>{r['ID']} - {r['Navn']} ({r['Kull']})</li>" for _, r in df_a_print.iterrows())}</ul>
-        <h2>{LAG_B}</h2><ul>{"".join(f"<li>{r['ID']} - {r['Navn']} ({r['Kull']})</li>" for _, r in df_b_print.iterrows())}</ul>
-        </body></html>
-        """
-        st.download_button("🖨️ Last ned utskriftsklar HTML", data=html_print, file_name="utskrift_lag.html", mime="text/html", use_container_width=True)
-
     st.markdown("---")
     st.subheader("Manuell flytting av spillere")
     elever_kun = st.session_state.df[st.session_state.df["Kategori"] == "Elev"]
@@ -436,11 +423,6 @@ elif side == "🏁 Laginndeling":
         st.markdown(f"### 🟡 {LAG_B}")
         st.dataframe(st.session_state.df[st.session_state.df["Lag"] == LAG_B][["ID", "Navn", "Kull"]], use_container_width=True, hide_index=True)
 
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  🎯 POENG & RESULTATER (Oppgradert med 3 faner + valgfritt kjønn)
-# ═════════════════════════════════════════════════════════════════════════════
-
 elif side == "🎯 Poeng & Resultater":
     tilgang_poeng = har_tilgang("las_poengforing")
     if not tilgang_poeng:
@@ -448,64 +430,32 @@ elif side == "🎯 Poeng & Resultater":
     else:
         st.title("🎯 Poengregistrering og Resultater")
         
-        poeng_fane1, poeng_fane2, poeng_fane3 = st.tabs([
-            "📝 Før inn poeng", 
-            "🏆 Resultattavle", 
-            "⚔️ Lagpoeng"
-        ])
-        
+        poeng_fane1, poeng_fane2 = st.tabs(["📝 Før inn poeng", "🏆 Resultattavle"])
         elever_df = st.session_state.df[st.session_state.df["Kategori"] == "Elev"]
         alle_kull = sorted([k for k in elever_df["Kull"].unique() if k.strip() != ""])
 
-        # ── FANE 1: Før inn poeng ────────────────────────────────────────
         with poeng_fane1:
             st.subheader("Registrer poeng for øvelser")
-            st.write("Skriv inn poeng (f.eks. 3 for 1. plass, 2 for 2. plass, 1 for 3. plass).")
-            
-            p_kol1, p_kol2 = st.columns(2)
-            with p_kol1:
-                valgt_kull = st.selectbox("Velg Kull", [""] + alle_kull, key="poeng_kull")
-            with p_kol2:
-                valgt_kjonn = st.selectbox(
-                    "Filtrer på kjønn (valgfritt)", 
-                    ["Alle", "Gutt", "Jente"], 
-                    key="poeng_kjonn"
-                )
+            valgt_kull = st.selectbox("Velg Kull", [""] + alle_kull, key="poeng_kull")
                 
             if valgt_kull:
-                # Filtrer elever — kjønn er nå valgfritt
-                if valgt_kjonn == "Alle":
-                    aktuelle_elever = elever_df[elever_df["Kull"] == valgt_kull][["ID", "Navn", "Kjønn"]].copy()
-                else:
-                    aktuelle_elever = elever_df[
-                        (elever_df["Kull"] == valgt_kull) & (elever_df["Kjønn"] == valgt_kjonn)
-                    ][["ID", "Navn", "Kjønn"]].copy()
-                
+                aktuelle_elever = elever_df[elever_df["Kull"] == valgt_kull][["ID", "Navn"]].copy()
                 if aktuelle_elever.empty:
                     st.info("Fant ingen registrerte elever i dette kullet.")
                 else:
-                    # Slå sammen med eksisterende poengdata
-                    redigerings_df = pd.merge(
-                        aktuelle_elever, st.session_state.poeng_df, 
-                        on="ID", how="left"
-                    ).fillna("0")
-                    # Sett Kjønn til "" der det er "0" fra fillna
-                    redigerings_df["Kjønn"] = redigerings_df["Kjønn"].replace("0", "")
+                    redigerings_df = pd.merge(aktuelle_elever, st.session_state.poeng_df, on="ID", how="left").fillna("0")
+                    redigerings_df["Nullstill"] = False
                     
-                    st.markdown("Rediger poengene og kjønn direkte i tabellen under:")
+                    st.markdown("Rediger poengene direkte i tabellen under:")
                     redigert_data = st.data_editor(
                         redigerings_df,
                         column_config={
                             "ID": st.column_config.TextColumn("ID", disabled=True, width="small"),
                             "Navn": st.column_config.TextColumn("Navn", disabled=True),
-                            "Kjønn": st.column_config.SelectboxColumn(
-                                "Kjønn",
-                                options=["", "Gutt", "Jente"],
-                                width="small"
-                            ),
                             "Øvelse 1": st.column_config.TextColumn("Øvelse 1", width="small"),
                             "Øvelse 2": st.column_config.TextColumn("Øvelse 2", width="small"),
                             "Øvelse 3": st.column_config.TextColumn("Øvelse 3", width="small"),
+                            "Nullstill": st.column_config.CheckboxColumn("Nullstill poeng ⚠️", default=False, width="small")
                         },
                         hide_index=True,
                         use_container_width=True,
@@ -513,301 +463,103 @@ elif side == "🎯 Poeng & Resultater":
                     )
                     
                     if st.button("💾 Lagre poeng og endringer", type="primary"):
-                        endret_kjonn_teller = 0
+                        resatt_teller = 0
                         for _, rad in redigert_data.iterrows():
                             pid = rad["ID"]
-                            
-                            # Oppdater kjønn i hoveddataen
-                            main_idx = st.session_state.df.index[st.session_state.df["ID"] == pid].tolist()
-                            if main_idx:
-                                gammelt_kjonn = st.session_state.df.at[main_idx[0], "Kjønn"]
-                                nytt_kjonn = rad["Kjønn"] if pd.notna(rad["Kjønn"]) else ""
-                                if gammelt_kjonn != nytt_kjonn:
-                                    st.session_state.df.at[main_idx[0], "Kjønn"] = nytt_kjonn
-                                    endret_kjonn_teller += 1
-                            
-                            # Oppdater poeng
                             poeng_idx = st.session_state.poeng_df.index[st.session_state.poeng_df["ID"] == pid].tolist()
-                            if poeng_idx:
-                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = rad["Øvelse 1"]
-                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = rad["Øvelse 2"]
-                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = rad["Øvelse 3"]
+                            skal_resettes = rad.get("Nullstill", False)
+                            
+                            if skal_resettes:
+                                if poeng_idx:
+                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = "0"
+                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = "0"
+                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = "0"
+                                resatt_teller += 1
                             else:
-                                ny_poeng = pd.DataFrame(
-                                    [[pid, rad["Øvelse 1"], rad["Øvelse 2"], rad["Øvelse 3"]]], 
-                                    columns=st.session_state.poeng_kolonner
-                                )
-                                st.session_state.poeng_df = pd.concat(
-                                    [st.session_state.poeng_df, ny_poeng], ignore_index=True
-                                )
+                                if poeng_idx:
+                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = rad["Øvelse 1"]
+                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = rad["Øvelse 2"]
+                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = rad["Øvelse 3"]
+                                else:
+                                    ny_poeng = pd.DataFrame([[pid, rad["Øvelse 1"], rad["Øvelse 2"], rad["Øvelse 3"]]], columns=st.session_state.poeng_kolonner)
+                                    st.session_state.poeng_df = pd.concat([st.session_state.poeng_df, ny_poeng], ignore_index=True)
                         
-                        detalj_tekst = f"Lagret poeng for {valgt_kull}"
-                        if valgt_kjonn != "Alle":
-                            detalj_tekst += f" ({valgt_kjonn})"
-                        if endret_kjonn_teller > 0:
-                            detalj_tekst += f" + endret kjønn for {endret_kjonn_teller} elever"
-                        
-                        loggfor_handling("Poeng lagret", detalj_tekst)
+                        detalj_tekst = f"Lagret poeng for {valgt_kull}. Resatt: {resatt_teller} stk."
+                        loggfor_handling("Poeng oppdatert", detalj_tekst)
                         if lagre_alle_data():
-                            st.success("Poeng og eventuelle kjønnsendringer er lagret!")
+                            st.success("Poeng og endringer ble lagret i skyen!")
                             st.rerun()
 
-        # ── FANE 2: Resultattavle ────────────────────────────────────────
         with poeng_fane2:
             st.subheader("Resultattavle og vinnere")
-            
-            r_kol1, r_kol2 = st.columns(2)
-            with r_kol1:
-                res_kull = st.selectbox("Vis resultater for Kull", [""] + alle_kull, key="res_kull")
-            with r_kol2:
-                res_kjonn = st.selectbox(
-                    "Filtrer på kjønn (valgfritt)", 
-                    ["Alle", "Gutt", "Jente"], 
-                    key="res_kjonn"
-                )
+            res_kull = st.selectbox("Vis resultater for Kull", [""] + alle_kull, key="res_kull")
                 
             if res_kull:
-                if res_kjonn == "Alle":
-                    aktuelle_elever = elever_df[elever_df["Kull"] == res_kull][["ID", "Navn", "Kjønn", "Lag"]]
-                else:
-                    aktuelle_elever = elever_df[
-                        (elever_df["Kull"] == res_kull) & (elever_df["Kjønn"] == res_kjonn)
-                    ][["ID", "Navn", "Kjønn", "Lag"]]
-                
+                aktuelle_elever = elever_df[elever_df["Kull"] == res_kull][["ID", "Navn", "Lag"]]
                 res_df = pd.merge(aktuelle_elever, st.session_state.poeng_df, on="ID", how="left").fillna("0")
-                res_df["Kjønn"] = res_df["Kjønn"].replace("0", "")
                 res_df["Lag"] = res_df["Lag"].replace("0", "")
                 
                 res_df["Øvelse 1"] = pd.to_numeric(res_df["Øvelse 1"], errors='coerce').fillna(0)
                 res_df["Øvelse 2"] = pd.to_numeric(res_df["Øvelse 2"], errors='coerce').fillna(0)
                 res_df["Øvelse 3"] = pd.to_numeric(res_df["Øvelse 3"], errors='coerce').fillna(0)
                 res_df["Totalt"] = res_df["Øvelse 1"] + res_df["Øvelse 2"] + res_df["Øvelse 3"]
-                
                 res_df = res_df.sort_values(by="Totalt", ascending=False).reset_index(drop=True)
                 
                 if res_df.empty or res_df["Totalt"].sum() == 0:
                     st.info("Ingen poeng registrert for denne gruppen ennå.")
                 else:
-                    st.markdown("### 🥇 Pallen")
-                    pall_k1, pall_k2, pall_k3 = st.columns(3)
-                    
-                    if len(res_df) > 0 and res_df.at[0, "Totalt"] > 0:
-                        with pall_k1:
-                            st.success(f"**🏆 1. plass**\n\n{res_df.at[0, 'Navn']} ({int(res_df.at[0, 'Totalt'])} poeng)")
-                    if len(res_df) > 1 and res_df.at[1, "Totalt"] > 0:
-                        with pall_k2:
-                            st.info(f"**🥈 2. plass**\n\n{res_df.at[1, 'Navn']} ({int(res_df.at[1, 'Totalt'])} poeng)")
-                    if len(res_df) > 2 and res_df.at[2, "Totalt"] > 0:
-                        with pall_k3:
-                            st.warning(f"**🥉 3. plass**\n\n{res_df.at[2, 'Navn']} ({int(res_df.at[2, 'Totalt'])} poeng)")
-                    
                     st.markdown("### Hele poengtabellen")
-                    vis_kolonner = ["ID", "Navn", "Kjønn", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
+                    vis_kolonner = ["ID", "Navn", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
                     st.dataframe(res_df[vis_kolonner], use_container_width=True, hide_index=True)
-
-        # ── FANE 3: Lagpoeng (ny!) ───────────────────────────────────────
-        with poeng_fane3:
-            st.subheader("⚔️ Lagsammenligning — Rød vs Gul")
-            st.write("Oversikt over total poengsum per lag, beregnet fra alle individuelle poeng.")
-            
-            # Hent alle elever med lag og poeng
-            lag_elever = st.session_state.df[
-                (st.session_state.df["Kategori"] == "Elev") & 
-                (st.session_state.df["Lag"] != "")
-            ][["ID", "Navn", "Kull", "Lag"]].copy()
-            
-            if lag_elever.empty:
-                st.info("Ingen elever er fordelt i lag ennå. Gå til Laginndeling først.")
-            else:
-                lag_med_poeng = pd.merge(
-                    lag_elever, st.session_state.poeng_df, on="ID", how="left"
-                ).fillna("0")
-                
-                for ov in ["Øvelse 1", "Øvelse 2", "Øvelse 3"]:
-                    lag_med_poeng[ov] = pd.to_numeric(lag_med_poeng[ov], errors='coerce').fillna(0)
-                lag_med_poeng["Totalt"] = lag_med_poeng["Øvelse 1"] + lag_med_poeng["Øvelse 2"] + lag_med_poeng["Øvelse 3"]
-                
-                # Beregn lagsummer
-                rod_df = lag_med_poeng[lag_med_poeng["Lag"] == LAG_A]
-                gul_df = lag_med_poeng[lag_med_poeng["Lag"] == LAG_B]
-                
-                rod_total = int(rod_df["Totalt"].sum())
-                gul_total = int(gul_df["Totalt"].sum())
-                rod_ov1 = int(rod_df["Øvelse 1"].sum())
-                rod_ov2 = int(rod_df["Øvelse 2"].sum())
-                rod_ov3 = int(rod_df["Øvelse 3"].sum())
-                gul_ov1 = int(gul_df["Øvelse 1"].sum())
-                gul_ov2 = int(gul_df["Øvelse 2"].sum())
-                gul_ov3 = int(gul_df["Øvelse 3"].sum())
-                
-                # Visuell sammenligning
-                samlet_max = max(rod_total, gul_total, 1)
-                rod_pst = rod_total / samlet_max * 100
-                gul_pst = gul_total / samlet_max * 100
-                
-                # Hvem leder?
-                if rod_total > gul_total:
-                    ledertekst = f"🔴 {LAG_A} leder med {rod_total - gul_total} poeng!"
-                elif gul_total > rod_total:
-                    ledertekst = f"🟡 {LAG_B} leder med {gul_total - rod_total} poeng!"
-                else:
-                    ledertekst = "⚖️ Det er helt likt!"
-                
-                st.markdown(f"### {ledertekst}")
-                
-                # Total-metrikk
-                mk1, mk2 = st.columns(2)
-                with mk1:
-                    st.metric(
-                        f"🔴 {LAG_A}",
-                        f"{rod_total} poeng",
-                        delta=f"{len(rod_df)} spillere"
-                    )
-                with mk2:
-                    st.metric(
-                        f"🟡 {LAG_B}",
-                        f"{gul_total} poeng",
-                        delta=f"{len(gul_df)} spillere"
-                    )
-                
-                # Stolpediagram (prosentbar)
-                st.markdown("### Poengfordeling")
-                bar_data = pd.DataFrame({
-                    "Lag": [LAG_A, LAG_B],
-                    "Øvelse 1": [rod_ov1, gul_ov1],
-                    "Øvelse 2": [rod_ov2, gul_ov2],
-                    "Øvelse 3": [rod_ov3, gul_ov3],
-                }).set_index("Lag")
-                st.bar_chart(bar_data, color=["#EF4444", "#F59E0B", "#10B981"])
-                
-                # Detaljtabell per lag
-                st.markdown("---")
-                d_kol1, d_kol2 = st.columns(2)
-                with d_kol1:
-                    st.markdown(f"#### 🔴 {LAG_A} — Individuelle bidrag")
-                    rod_vis = rod_df[["ID", "Navn", "Kull", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]].sort_values("Totalt", ascending=False).reset_index(drop=True)
-                    st.dataframe(rod_vis, use_container_width=True, hide_index=True)
-                with d_kol2:
-                    st.markdown(f"#### 🟡 {LAG_B} — Individuelle bidrag")
-                    gul_vis = gul_df[["ID", "Navn", "Kull", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]].sort_values("Totalt", ascending=False).reset_index(drop=True)
-                    st.dataframe(gul_vis, use_container_width=True, hide_index=True)
-                
-                # Fordeling per kull
-                st.markdown("---")
-                st.markdown("### Poeng per kull")
-                kull_lag_df = lag_med_poeng.groupby(["Kull", "Lag"])["Totalt"].sum().unstack(fill_value=0)
-                if not kull_lag_df.empty:
-                    st.bar_chart(kull_lag_df)
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  📊 INFORMASJON
-# ═════════════════════════════════════════════════════════════════════════════
 
 elif side == "📊 Informasjon":
     st.title("Festivalinformasjon og statistikk")
     total_registrerte = len(st.session_state.df)
     kategoritelling = st.session_state.df["Kategori"].value_counts()
-    antall_rod = len(st.session_state.df[st.session_state.df["Lag"] == LAG_A])
-    antall_gul = len(st.session_state.df[st.session_state.df["Lag"] == LAG_B])
-    mangler_lag = len(st.session_state.df[(st.session_state.df["Kategori"] == "Elev") & (st.session_state.df["Lag"] == "")])
-
-    m_kol1, m_kol2, m_kol3 = st.columns(3)
-    with m_kol1:
-        st.metric("Totalt registrerte", f"{total_registrerte} personer")
-        st.metric("Elever på rød", f"{antall_rod} stk")
-    with m_kol2:
-        st.metric("Elever totalt", f"{kategoritelling.get('Elev', 0)} stk")
-        st.metric("Elever på gul", f"{antall_gul} stk")
-    with m_kol3:
-        st.metric("Frivillige mannskap", f"{kategoritelling.get('Frivillig', 0)} stk")
-        st.metric("Mangler laginndeling", f"{mangler_lag} elever")
-
+    avdelingstelling = st.session_state.df["Avdeling"].value_counts()
+    
+    st.metric("Totalt registrerte", f"{total_registrerte} personer")
     st.markdown("---")
-    st.subheader("Komplett fordeling fordelt på roller")
-    for kat in KATEGORIER:
-        antall_kat = kategoritelling.get(kat, 0)
-        st.write(f"Kategori {kat}: {antall_kat} personer")
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  📜 HISTORIKK (Oppgradert med Bruker vs Admin)
-# ═════════════════════════════════════════════════════════════════════════════
+    info_k1, info_k2 = st.columns(2)
+    with info_k1:
+        st.subheader("Fordelt på roller")
+        for kat in KATEGORIER:
+            st.write(f"**{kat}**: {kategoritelling.get(kat, 0)} personer")
+    with info_k2:
+        st.subheader("Fordelt på avdeling")
+        for avd in AVDELINGER:
+            st.write(f"**{avd}**: {avdelingstelling.get(avd, 0)} personer")
 
 elif side == "📜 Historikk":
     st.title("Systemhistorikk og endringslogg")
-    st.write("Alle endringer logges automatisk med hvem som utførte dem.")
-    
     logg_data = st.session_state.logg_df.copy()
-    
     if logg_data.empty:
-        st.info("Ingen historikk ennå. Endringer vil dukke opp her etterhvert.")
+        st.info("Ingen historikk ennå.")
     else:
-        # Filtreringsmuligheter
-        filt_kol1, filt_kol2 = st.columns(2)
-        with filt_kol1:
-            rolle_filter = st.selectbox(
-                "Filtrer på rolle", 
-                ["Alle", "🔒 Admin", "👤 Bruker"],
-                key="hist_rolle"
-            )
-        with filt_kol2:
-            handling_typer = ["Alle"] + sorted(logg_data["Handling"].unique().tolist())
-            handling_filter = st.selectbox(
-                "Filtrer på handlingstype",
-                handling_typer,
-                key="hist_handling"
-            )
-        
-        vis_logg = logg_data.copy()
-        if rolle_filter != "Alle":
-            vis_logg = vis_logg[vis_logg["Rolle"] == rolle_filter]
-        if handling_filter != "Alle":
-            vis_logg = vis_logg[vis_logg["Handling"] == handling_filter]
-        
-        st.markdown(f"Viser **{len(vis_logg)}** av {len(logg_data)} loggoppføringer.")
-        
-        st.dataframe(
-            vis_logg, 
-            use_container_width=True, 
-            hide_index=True,
-            column_config={
-                "Tidspunkt": st.column_config.TextColumn("Tidspunkt", width="medium"),
-                "Rolle": st.column_config.TextColumn("Utført av", width="small"),
-                "Handling": st.column_config.TextColumn("Handling", width="small"),
-                "Detaljer": st.column_config.TextColumn("Detaljer", width="large"),
-            }
-        )
-
-
-# ═════════════════════════════════════════════════════════════════════════════
-#  ⚙️ ADMIN-MENY
-# ═════════════════════════════════════════════════════════════════════════════
+        st.dataframe(logg_data, use_container_width=True, hide_index=True)
 
 elif side == "⚙️ Admin-meny":
     st.title("⚙️ Kontrollpanel for Administrator")
     
     if not st.session_state.is_admin:
         st.subheader("Sikkerhetsinnlogging")
-        passord_input = st.text_input("Vennligst oppgi admin-passord for å låse opp innstillinger", type="password")
+        passord_input = st.text_input("Vennligst oppgi admin-passord for å låse opp", type="password")
         if st.button("Lås opp meny"):
-            if passord_input == st.session_state.innstillinger["passord"]:
+            if passord_input == st.session_state.innstillinger.get("passord", "Admin2026"):
                 st.session_state.is_admin = True
                 st.success("Innlogging godkjent. Rettigheter aktivert.")
                 st.rerun()
             else:
-                st.error("Ugyldig passord. Vennligst prøv igjen.")
+                st.error("Ugyldig passord.")
     else:
         st.success("🔒 Du har full administratortilgang.")
-        
         st.markdown("---")
         st.subheader("Rettigheter og adgangskontroll")
-        st.write("Velg hvilke funksjoner som skal kreve admin-passord for å kunne brukes:")
         
-        c_nullstill = st.checkbox("Lås full systemnullstilling (Faresone)", value=(str(st.session_state.innstillinger["las_nullstill"]) == "True"))
-        c_autofordel = st.checkbox("Lås automatisk lagfordeling", value=(str(st.session_state.innstillinger["las_autofordel"]) == "True"))
-        c_import = st.checkbox("Lås filimport fra Excel/CSV", value=(str(st.session_state.innstillinger["las_import"]) == "True"))
-        c_slett = st.checkbox("Lås sletting av enkelt-deltakere", value=(str(st.session_state.innstillinger["las_slett_enkel"]) == "True"))
+        c_nullstill = st.checkbox("Lås full systemnullstilling (Faresone)", value=(str(st.session_state.innstillinger.get("las_nullstill", "True")) == "True"))
+        c_autofordel = st.checkbox("Lås automatisk lagfordeling", value=(str(st.session_state.innstillinger.get("las_autofordel", "True")) == "True"))
+        c_import = st.checkbox("Lås filimport fra Excel/CSV", value=(str(st.session_state.innstillinger.get("las_import", "True")) == "True"))
+        c_slett = st.checkbox("Lås sletting av enkelt-deltakere", value=(str(st.session_state.innstillinger.get("las_slett_enkel", "True")) == "True"))
         c_poeng = st.checkbox("Lås Poeng & Resultater menyen", value=(str(st.session_state.innstillinger.get("las_poengforing", "True")) == "True"))
         
         if st.button("💾 Lagre konfigurasjon"):
@@ -818,7 +570,7 @@ elif side == "⚙️ Admin-meny":
             st.session_state.innstillinger["las_poengforing"] = "True" if c_poeng else "False"
             lagre_innstillinger()
             loggfor_handling("Admin", "Rettighetsmatrisen ble oppdatert")
-            st.success("Rettighetsmatrisen ble oppdatert og lagret!")
+            st.success("Rettighetsmatrisen ble oppdatert og lagret til skyen!")
             
         st.markdown("---")
         st.subheader("Endre administratorpassord")
@@ -834,4 +586,4 @@ elif side == "⚙️ Admin-meny":
                 st.session_state.innstillinger["passord"] = nytt_passord.strip()
                 lagre_innstillinger()
                 loggfor_handling("Admin", "Admin-passord ble endret")
-                st.success("Admin-passordet ble endret!")
+                st.success("Admin-passordet ble endret og synkronisert!")
