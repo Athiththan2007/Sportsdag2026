@@ -259,7 +259,6 @@ if side == "📋 Registrering":
                         st.success("Deltakeren ble slettet fra databasen.")
                         st.rerun()
 
-    # ── Filimport ────────────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("Filimport")
     tilgang_import = har_tilgang("las_import")
@@ -319,7 +318,6 @@ if side == "📋 Registrering":
         except Exception as e:
             st.error(f"Kunne ikke tolke filen: {e}")
 
-    # ── Søk og oversikt ──────────────────────────────────────────────────
     st.markdown("---")
     st.subheader("Globalt søk og oversikt")
     sok_tekst = st.text_input("Søk i sanntid på tvers av ID, navn, kull, kategori, lag eller avdeling")
@@ -381,96 +379,50 @@ if side == "📋 Registrering":
 
 
 # ═════════════════════════════════════════════════════════════════════════════
-#  🏁 LAGINNDELING (NÅ MED AVANSERT FILTRERING OG SORTERING)
+#  🏁 LAGINNDELING
 # ═════════════════════════════════════════════════════════════════════════════
 
 elif side == "🏁 Laginndeling":
     st.title("Laginndeling og balansering")
     tilgang_fordel = har_tilgang("las_autofordel")
     
-    # ── Hurtigknapper ─────────────────────────────────────────────────
+    # ── Globalt Filter ───────────────────────────────────────────────────
+    st.markdown("### 🔍 Filtrer visning")
+    f_kol1, f_kol2, f_kol3, f_kol4 = st.columns(4)
+    with f_kol1:
+        f_avd = st.multiselect("Avdeling", AVDELINGER, default=AVDELINGER)
+    with f_kol2:
+        f_kat = st.multiselect("Kategori", KATEGORIER, default=["Elev"])
+    with f_kol3:
+        unike_kull = sorted([k for k in st.session_state.df["Kull"].unique() if str(k).strip() != ""])
+        f_kull = st.multiselect("Kull", unike_kull, default=unike_kull)
+    with f_kol4:
+        f_kjonn = st.multiselect("Kjønn", ["Gutt", "Jente", ""], default=["Gutt", "Jente", ""])
+        
+    f_mask = pd.Series(True, index=st.session_state.df.index)
+    if f_avd: f_mask &= st.session_state.df["Avdeling"].isin(f_avd)
+    if f_kat: f_mask &= st.session_state.df["Kategori"].isin(f_kat)
+    if f_kull: f_mask &= (st.session_state.df["Kull"].isin(f_kull) | (st.session_state.df["Kull"] == ""))
+    if f_kjonn: f_mask &= st.session_state.df["Kjønn"].isin(f_kjonn)
+    
+    filtrert_df = st.session_state.df[f_mask]
+    
+    # ── Handlingsknapper ─────────────────────────────────────────────────
+    st.markdown("---")
     b_kol1, b_kol2 = st.columns(2)
     with b_kol1:
-        autofordel_tekst = "✨ Hurtig auto-fordel ufordelte elever" if tilgang_fordel else "✨ Auto-fordel (Admin)"
-        if st.button(autofordel_tekst, disabled=not tilgang_fordel, use_container_width=True):
-            ufordelte = st.session_state.df[(st.session_state.df["Kategori"] == "Elev") & (st.session_state.df["Lag"] == "")]
-            if ufordelte.empty:
-                st.info("Ingen ufordelte elever ble funnet.")
+        autofordel_tekst = "✨ Auto-fordel utvalget (Balansert)" if tilgang_fordel else "✨ Auto-fordel (Admin)"
+        if st.button(autofordel_tekst, disabled=not tilgang_fordel, use_container_width=True, type="primary"):
+            ufordelte_i_visning = filtrert_df[filtrert_df["Lag"] == ""]
+            if ufordelte_i_visning.empty:
+                st.info("Ingen ufordelte deltakere matcher det valgte filteret.")
             else:
-                indekser = ufordelte.index.tolist()
-                random.shuffle(indekser)
                 antall_a = len(st.session_state.df[st.session_state.df["Lag"] == LAG_A])
                 antall_b = len(st.session_state.df[st.session_state.df["Lag"] == LAG_B])
-                for idx_val in indekser:
-                    if antall_a <= antall_b:
-                        st.session_state.df.at[idx_val, "Lag"] = LAG_A
-                        antall_a += 1
-                    else:
-                        st.session_state.df.at[idx_val, "Lag"] = LAG_B
-                        antall_b += 1
-                loggfor_handling("Hurtig laginndeling", f"Balanserte {len(indekser)} elever")
-                lagre_alle_data()
-                st.rerun()
                 
-    with b_kol2:
-        omfordel_tekst = "⚠️ Nullstill og fordel alle på nytt" if tilgang_fordel else "⚠️ Omgjør lag (Admin)"
-        if st.button(omfordel_tekst, disabled=not tilgang_fordel, use_container_width=True):
-            elever = st.session_state.df[st.session_state.df["Kategori"] == "Elev"].copy()
-            indekser = elever.index.tolist()
-            random.shuffle(indekser)
-            midt = len(indekser) // 2
-            for i, idx_val in enumerate(indekser):
-                st.session_state.df.at[idx_val, "Lag"] = LAG_A if i < midt else LAG_B
-            st.session_state.df.loc[st.session_state.df["Kategori"] != "Elev", "Lag"] = ""
-            loggfor_handling("Laginndeling", "Nullstilte og omfordelte alle elever")
-            lagre_alle_data()
-            st.rerun()
-
-    # ── AVANSERT SORTERING OG FILTRERING ───────────────────────────────
-    st.markdown("---")
-    st.subheader("🛠️ Avansert Laginndeling (Filtrering & Sortering)")
-    with st.expander("Åpne for avansert sortering (Avdeling, Kull, Kjønn m.m.)"):
-        a_k1, a_k2, a_k3, a_k4 = st.columns(4)
-        with a_k1:
-            f_avd = st.multiselect("Avdeling", AVDELINGER, default=AVDELINGER)
-        with a_k2:
-            f_kat = st.multiselect("Kategori", KATEGORIER, default=["Elev"])
-        with a_k3:
-            unike_kull = sorted([k for k in st.session_state.df["Kull"].unique() if str(k).strip() != ""])
-            f_kull = st.multiselect("Kull", unike_kull, default=unike_kull)
-        with a_k4:
-            f_kjonn = st.multiselect("Kjønn", ["Gutt", "Jente", ""], default=["Gutt", "Jente", ""])
-            
-        # Generer filter basert på valgene ovenfor (og kun for ufordelte)
-        mask_ufordelt = (st.session_state.df["Lag"] == "")
-        mask_avd = st.session_state.df["Avdeling"].isin(f_avd) if f_avd else True
-        mask_kat = st.session_state.df["Kategori"].isin(f_kat) if f_kat else True
-        mask_kull = st.session_state.df["Kull"].isin(f_kull) | (st.session_state.df["Kull"] == "") if f_kull else True
-        mask_kjonn = st.session_state.df["Kjønn"].isin(f_kjonn) if f_kjonn else True
-        
-        filtrert_ufordelt = st.session_state.df[mask_ufordelt & mask_avd & mask_kat & mask_kull & mask_kjonn].copy()
-        
-        st.write(f"**Fant {len(filtrert_ufordelt)} ufordelte deltakere med dette filteret:**")
-        st.dataframe(filtrert_ufordelt[["ID", "Navn", "Kategori", "Kull", "Kjønn", "Avdeling"]], use_container_width=True, hide_index=True)
-        
-        fordel_metode = st.radio(
-            "Velg fordelingsmetode:", 
-            [
-                "1. Standard tilfeldig 50/50 (Rask blanding)", 
-                "2. Balansert 50/50 (Sørger for lik fordeling innad i hvert kull og kjønn - Anbefalt!)"
-            ],
-            horizontal=False
-        )
-        
-        if st.button("✨ Fordel dette utvalget i lag", disabled=not tilgang_fordel, type="primary"):
-            if filtrert_ufordelt.empty:
-                st.warning("Ingen ufordelte deltakere matcher filteret ditt.")
-            else:
-                antall_a = len(st.session_state.df[st.session_state.df["Lag"] == LAG_A])
-                antall_b = len(st.session_state.df[st.session_state.df["Lag"] == LAG_B])
-
-                if "Standard" in fordel_metode:
-                    indekser = filtrert_ufordelt.index.tolist()
+                grupper = ufordelte_i_visning.groupby(["Kull", "Kjønn"])
+                for _, gruppe in grupper:
+                    indekser = gruppe.index.tolist()
                     random.shuffle(indekser)
                     for idx_val in indekser:
                         if antall_a <= antall_b:
@@ -479,57 +431,86 @@ elif side == "🏁 Laginndeling":
                         else:
                             st.session_state.df.at[idx_val, "Lag"] = LAG_B
                             antall_b += 1
-                else:
-                    # Balansert distribusjon (grupperer etter Kull og Kjønn før fordeling)
-                    grupper = filtrert_ufordelt.groupby(["Kull", "Kjønn"])
-                    for _, gruppe in grupper:
-                        indekser = gruppe.index.tolist()
-                        random.shuffle(indekser)
-                        for idx_val in indekser:
-                            if antall_a <= antall_b:
-                                st.session_state.df.at[idx_val, "Lag"] = LAG_A
-                                antall_a += 1
-                            else:
-                                st.session_state.df.at[idx_val, "Lag"] = LAG_B
-                                antall_b += 1
-
-                loggfor_handling("Avansert Laginndeling", f"Fordelte {len(filtrert_ufordelt)} personer med spesialfilter.")
+                            
+                loggfor_handling("Avansert Laginndeling", f"Balanserte {len(ufordelte_i_visning)} elever fra gjeldende filter.")
                 lagre_alle_data()
-                st.success(f"Suksess! {len(filtrert_ufordelt)} personer ble delt inn i lag.")
+                st.success(f"Suksess! {len(ufordelte_i_visning)} personer ble balansert fordelt i lag.")
                 st.rerun()
+                
+    with b_kol2:
+        nullstill_tekst = "⚠️ Nullstill laginndeling" if tilgang_fordel else "⚠️ Nullstill lag (Admin)"
+        if st.button(nullstill_tekst, disabled=not tilgang_fordel, use_container_width=True):
+            st.session_state.df.loc[st.session_state.df["Kategori"] == "Elev", "Lag"] = ""
+            loggfor_handling("Laginndeling", "Nullstilte lagtilhørighet for alle elever")
+            lagre_alle_data()
+            st.rerun()
 
-    # ── Eksport-knapper ───────────────────────────────
+    # ── Utskrift og Eksport ──────────────────────────────────────────────
     st.markdown("---")
+    st.subheader("🖨️ Utskrift og Eksport")
+    utskrift_avd = st.multiselect("Velg avdeling for HTML-utskrift og CSV (Gjelder kun for eksport):", AVDELINGER, default=AVDELINGER, key="print_avd")
+    
     eks_kol1, eks_kol2 = st.columns(2)
     with eks_kol1:
-        csv_data = st.session_state.df[st.session_state.df["Lag"] != ""].to_csv(index=False, encoding="utf-8-sig")
+        eksport_df = st.session_state.df[(st.session_state.df["Lag"] != "") & (st.session_state.df["Avdeling"].isin(utskrift_avd))]
+        csv_data = eksport_df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
-            "💾 Last ned CSV-eksport av lag", 
-            data=csv_data, file_name="lagfordeling_eksport.csv", 
+            "💾 Last ned CSV-eksport", 
+            data=csv_data, file_name="lagfordeling.csv", 
             mime="text/csv", use_container_width=True
         )
     with eks_kol2:
-        df_a_print = st.session_state.df[st.session_state.df["Lag"] == LAG_A]
-        df_b_print = st.session_state.df[st.session_state.df["Lag"] == LAG_B]
-        html_print = f"""<html><head><meta charset="utf-8"><style>
-body{{font-family:Arial,sans-serif;padding:30px}}
-h2{{border-bottom:2px solid #333;padding-bottom:6px}}
-table{{width:100%;border-collapse:collapse;margin-bottom:30px}}
-th,td{{border:1px solid #ccc;padding:8px 12px;text-align:left}}
-th{{background:#eee}}
-</style></head><body>
-<h1>Sportsfestival 2026 — Lagfordeling</h1>
-<h2>🔴 {LAG_A} ({len(df_a_print)} stk)</h2>
-<table><tr><th>ID</th><th>Navn</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
-{"".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td>{r['Avdeling']}</td></tr>" for _, r in df_a_print.iterrows())}
-</table>
-<h2>🟡 {LAG_B} ({len(df_b_print)} stk)</h2>
-<table><tr><th>ID</th><th>Navn</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
-{"".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td>{r['Avdeling']}</td></tr>" for _, r in df_b_print.iterrows())}
-</table>
-</body></html>"""
+        df_a_print = st.session_state.df[(st.session_state.df["Lag"] == LAG_A) & (st.session_state.df["Avdeling"].isin(utskrift_avd))]
+        df_b_print = st.session_state.df[(st.session_state.df["Lag"] == LAG_B) & (st.session_state.df["Avdeling"].isin(utskrift_avd))]
+        
+        rader_a = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_a_print.iterrows())
+        rader_b = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_b_print.iterrows())
+        
+        html_print = f"""<!DOCTYPE html>
+<html>
+<head>
+    <meta charset="utf-8">
+    <title>Laginndeling 2026</title>
+    <style>
+        body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6f9; color: #2c3e50; padding: 40px; margin: 0; }}
+        .container {{ max-width: 900px; margin: 0 auto; background: #ffffff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }}
+        h1 {{ text-align: center; color: #1a252f; border-bottom: 3px solid #3498db; padding-bottom: 15px; margin-bottom: 40px; text-transform: uppercase; letter-spacing: 1px; }}
+        .team-header {{ display: flex; align-items: center; margin-top: 40px; margin-bottom: 20px; }}
+        .team-header h2 {{ margin: 0; padding-left: 15px; font-size: 24px; color: #2c3e50; border-left: 5px solid; }}
+        .red-team h2 {{ border-color: #e74c3c; }}
+        .yellow-team h2 {{ border-color: #f1c40f; }}
+        table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 15px; }}
+        th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
+        th {{ background-color: #f8fafc; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 13px; letter-spacing: 0.5px; }}
+        tr:nth-child(even) {{ background-color: #fcfcfc; }}
+        .badge {{ display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; background: #e2e8f0; color: #475569; }}
+        @media print {{ body {{ padding: 0; background-color: #ffffff; }} .container {{ box-shadow: none; padding: 0; }} }}
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Sportsfestival 2026 — Lagfordeling</h1>
+        
+        <div class="team-header red-team">
+            <h2>🔴 {LAG_A} ({len(df_a_print)} deltakere)</h2>
+        </div>
+        <table>
+            <tr><th>ID</th><th>Navn</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+            {rader_a}
+        </table>
+        
+        <div class="team-header yellow-team">
+            <h2>🟡 {LAG_B} ({len(df_b_print)} deltakere)</h2>
+        </div>
+        <table>
+            <tr><th>ID</th><th>Navn</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+            {rader_b}
+        </table>
+    </div>
+</body>
+</html>"""
         st.download_button(
-            "🖨️ Last ned utskriftsklar HTML", 
+            "🖨️ Last ned HTML for utskrift", 
             data=html_print, file_name="utskrift_lag.html", 
             mime="text/html", use_container_width=True
         )
@@ -537,9 +518,9 @@ th{{background:#eee}}
     # ── Lag-kolonner med pilknapper ──────────────────────────────────────
     st.markdown("---")
     
-    df_rod = st.session_state.df[st.session_state.df["Lag"] == LAG_A].reset_index()
-    df_ufordelt = st.session_state.df[(st.session_state.df["Kategori"] == "Elev") & (st.session_state.df["Lag"] == "")].reset_index()
-    df_gul = st.session_state.df[st.session_state.df["Lag"] == LAG_B].reset_index()
+    df_rod = filtrert_df[filtrert_df["Lag"] == LAG_A].reset_index()
+    df_ufordelt = filtrert_df[filtrert_df["Lag"] == ""].reset_index()
+    df_gul = filtrert_df[filtrert_df["Lag"] == LAG_B].reset_index()
 
     l_kol1, l_kol2, l_kol3 = st.columns(3)
     
@@ -588,12 +569,11 @@ th{{background:#eee}}
             with c2:
                 st.text(f"{r['ID']} - {r['Navn']} ({r['Kull']})")
 
-    # Fjern fra lag-knapp
     st.markdown("---")
     st.subheader("Fjern fra lag")
-    lag_spillere = st.session_state.df[(st.session_state.df["Lag"] == LAG_A) | (st.session_state.df["Lag"] == LAG_B)]
+    lag_spillere = filtrert_df[(filtrert_df["Lag"] == LAG_A) | (filtrert_df["Lag"] == LAG_B)]
     if not lag_spillere.empty:
-        fjern_valg = st.selectbox("Velg spiller å fjerne fra laget", lag_spillere["ID"] + " - " + lag_spillere["Navn"] + " (" + lag_spillere["Lag"] + ")")
+        fjern_valg = st.selectbox("Velg spiller i gjeldende visning å fjerne fra laget", lag_spillere["ID"] + " - " + lag_spillere["Navn"] + " (" + lag_spillere["Lag"] + ")")
         if st.button("❌ Fjern fra lag (sett til ufordelt)"):
             fjern_id = fjern_valg.split(" - ")[0]
             fjern_idx = st.session_state.df.index[st.session_state.df["ID"] == fjern_id].tolist()[0]
@@ -624,7 +604,6 @@ elif side == "🎯 Poeng & Resultater":
         elever_df = st.session_state.df[st.session_state.df["Kategori"] == "Elev"]
         alle_kull = sorted([k for k in elever_df["Kull"].unique() if k.strip() != ""])
 
-        # ── FANE 1: Før inn poeng ────────────────────────────────────────
         with poeng_fane1:
             st.subheader("Registrer poeng for øvelser")
             st.write("Huk av «Nullstill poeng ⚠️» for å slette poengene til en enkelt deltaker.")
@@ -673,7 +652,6 @@ elif side == "🎯 Poeng & Resultater":
                         for _, rad in redigert_data.iterrows():
                             pid = rad["ID"]
                             
-                            # Kjønnsendring i hoveddataen
                             main_idx = st.session_state.df.index[st.session_state.df["ID"] == pid].tolist()
                             if main_idx:
                                 gammelt_kjonn = st.session_state.df.at[main_idx[0], "Kjønn"]
@@ -682,7 +660,6 @@ elif side == "🎯 Poeng & Resultater":
                                     st.session_state.df.at[main_idx[0], "Kjønn"] = nytt_kjonn
                                     endret_kjonn_teller += 1
                             
-                            # Poeng + nullstilling
                             poeng_idx = st.session_state.poeng_df.index[st.session_state.poeng_df["ID"] == pid].tolist()
                             skal_resettes = rad.get("Nullstill", False)
                             
@@ -717,7 +694,6 @@ elif side == "🎯 Poeng & Resultater":
                             st.success("Poeng og endringer ble lagret i skyen!")
                             st.rerun()
 
-        # ── FANE 2: Resultattavle ──────────────
         with poeng_fane2:
             st.subheader("Resultattavle og vinnere")
             r_kol1, r_kol2 = st.columns(2)
@@ -762,7 +738,6 @@ elif side == "🎯 Poeng & Resultater":
                     vis_kolonner = ["ID", "Navn", "Kjønn", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
                     st.dataframe(res_df[vis_kolonner], use_container_width=True, hide_index=True)
 
-        # ── FANE 3: Lagpoeng ─────────────────────────────────────────────
         with poeng_fane3:
             st.subheader("⚔️ Lagsammenligning — Rød vs Gul")
             
