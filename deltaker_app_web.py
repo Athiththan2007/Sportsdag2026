@@ -6,7 +6,7 @@ from datetime import datetime
 from github import Github
 
 try:
-    from xhtml2pdf import pisa
+    from weasyprint import HTML
     PDF_TILGJENGELIG = True
 except ImportError:
     PDF_TILGJENGELIG = False
@@ -585,8 +585,9 @@ elif side == "🏁 Laginndeling":
     dok_html = f"""<!DOCTYPE html>
 <html><head><meta charset="utf-8">
 <style>
+@import url('https://fonts.googleapis.com/css2?family=Noto+Sans+Tamil:wght@300;400;500;600;700&family=Inter:wght@300;400;500;600;700&display=swap');
 @page {{ size: A4; margin: 22mm 20mm; }}
-body {{ font-family: Helvetica, Arial, sans-serif; color: #111; font-size: 10px; line-height: 1.45; margin: 0; padding: 0; }}
+body {{ font-family: 'Inter', 'Noto Sans Tamil', Helvetica, Arial, sans-serif; color: #111; font-size: 10px; line-height: 1.45; margin: 0; padding: 0; }}
 
 .title {{ font-size: 20px; font-weight: 300; letter-spacing: 3px; text-transform: uppercase; color: #111; margin: 0 0 2px 0; }}
 .org {{ font-size: 9px; color: #999; letter-spacing: 1px; margin-bottom: 20px; }}
@@ -680,11 +681,13 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
     
     with eks_kol3:
         if not PDF_TILGJENGELIG:
-            st.info("Installer: `pip install xhtml2pdf`")
+            st.info("Installer: `pip install weasyprint`")
         else:
-            buf = io.BytesIO()
-            pisa.CreatePDF(io.StringIO(dok_html), dest=buf)
-            st.download_button("📄 PDF", data=buf.getvalue(), file_name="lagfordeling.pdf", mime="application/pdf", use_container_width=True)
+            try:
+                pdf_bytes = HTML(string=dok_html).write_pdf()
+                st.download_button("📄 PDF", data=pdf_bytes, file_name="lagfordeling.pdf", mime="application/pdf", use_container_width=True)
+            except Exception as e:
+                st.error(f"PDF-feil: {e}")
 
     st.markdown("---")
     
