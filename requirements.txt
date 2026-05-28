@@ -1,3 +1,4 @@
 streamlit
+xhtml2pdf
 pandas
 PyGithub
