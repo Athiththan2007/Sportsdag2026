@@ -16,6 +16,11 @@ AVDELINGER = ["Ålesund", "Ulsteinvik", "Florø"]
 LAG_A = "Lag Rød"
 LAG_B = "Lag Gul"
 
+def ikoniser_lag(lagnavn):
+    if lagnavn == LAG_A: return f"🔴 {LAG_A}"
+    elif lagnavn == LAG_B: return f"🟡 {LAG_B}"
+    return "⚪ Ufordelt"
+
 st.set_page_config(
     page_title="Sportsfestival 2026",
     page_icon="🏆",
@@ -750,7 +755,7 @@ elif side == "🎯 Poeng & Resultater":
             if valgt_kjonn != "Alle":
                 poeng_mask &= alle_deltakere_df["Kjønn"] == valgt_kjonn
             
-            aktuelle = alle_deltakere_df[poeng_mask][["ID", "Navn", "Kategori", "Kjønn"]].copy()
+            aktuelle = alle_deltakere_df[poeng_mask][["ID", "Navn", "Kategori", "Kjønn", "Lag"]].copy()
             
             if poeng_kat == "Alle" and valgt_kull == "Alle":
                 st.info("Velg minst en kategori eller et kull for å føre inn poeng.")
@@ -760,13 +765,20 @@ elif side == "🎯 Poeng & Resultater":
                 redigerings_df = pd.merge(aktuelle, st.session_state.poeng_df, on="ID", how="left").fillna("0")
                 redigerings_df["Kjønn"] = redigerings_df["Kjønn"].replace("0", "")
                 redigerings_df["Kategori"] = redigerings_df["Kategori"].replace("0", "")
+                
+                # Fargekode lagvisning
+                redigerings_df["Lag"] = redigerings_df["Lag"].fillna("").apply(ikoniser_lag)
                 redigerings_df["Nullstill"] = False
+                
+                # Sorter kolonnene for en bedre visning i editoren
+                redigerings_df = redigerings_df[["ID", "Navn", "Lag", "Kategori", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Nullstill"]]
                 
                 redigert_data = st.data_editor(
                     redigerings_df,
                     column_config={
                         "ID": st.column_config.TextColumn("ID", disabled=True, width="small"),
                         "Navn": st.column_config.TextColumn("Navn", disabled=True),
+                        "Lag": st.column_config.TextColumn("Lag", disabled=True, width="small"),
                         "Kategori": st.column_config.TextColumn("Kategori", disabled=True, width="small"),
                         "Kjønn": st.column_config.SelectboxColumn("Kjønn", options=["", "Gutt", "Jente"], width="small"),
                         "Øvelse 1": st.column_config.TextColumn("Øvelse 1", width="small"),
@@ -857,8 +869,10 @@ elif side == "🎯 Poeng & Resultater":
                 
                 res_df = pd.merge(aktuelle_res, st.session_state.poeng_df, on="ID", how="left").fillna("0")
                 res_df["Kjønn"] = res_df["Kjønn"].replace("0", "")
-                res_df["Lag"] = res_df["Lag"].replace("0", "")
                 res_df["Kategori"] = res_df["Kategori"].replace("0", "")
+                
+                # Fargekode lagvisning
+                res_df["Lag"] = res_df["Lag"].fillna("").apply(ikoniser_lag)
                 
                 for ov in ["Øvelse 1", "Øvelse 2", "Øvelse 3"]:
                     res_df[ov] = pd.to_numeric(res_df[ov], errors='coerce').fillna(0)
@@ -881,7 +895,7 @@ elif side == "🎯 Poeng & Resultater":
                             st.warning(f"**🥉 3. plass**\n\n{res_df.at[2, 'Navn']} ({int(res_df.at[2, 'Totalt'])} poeng)")
                     
                     st.markdown("### Hele poengtabellen")
-                    vis_kolonner = ["ID", "Navn", "Kategori", "Kjønn", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
+                    vis_kolonner = ["ID", "Navn", "Lag", "Kategori", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
                     st.dataframe(res_df[vis_kolonner], use_container_width=True, hide_index=True)
 
         with poeng_fane3:
