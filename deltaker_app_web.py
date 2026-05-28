@@ -500,6 +500,45 @@ elif side == "🏁 Laginndeling":
             st.rerun()
 
     st.markdown("---")
+    with st.expander("📥 Importer laginndeling fra fil"):
+        if not tilgang_fordel:
+            st.info("Import av laginndeling er låst bak admin-tilgang.")
+        
+        import_lag_fil = st.file_uploader("Last opp CSV eller Excel med kolonner for 'ID' og 'Lag'", type=["csv", "xlsx"], key="import_lag_uploader", disabled=not tilgang_fordel)
+        
+        if import_lag_fil and tilgang_fordel:
+            try:
+                if import_lag_fil.name.endswith(".xlsx"):
+                    import_df = pd.read_excel(import_lag_fil, dtype=str).fillna("")
+                else:
+                    import_df = pd.read_csv(import_lag_fil, dtype=str).fillna("")
+                
+                if "ID" not in import_df.columns or "Lag" not in import_df.columns:
+                    st.error("Filen må inneholde kolonnene 'ID' og 'Lag'.")
+                else:
+                    st.write(f"Fant {len(import_df)} rader. Forhåndsvisning:")
+                    st.dataframe(import_df[["ID", "Navn", "Lag"]].head(5) if "Navn" in import_df.columns else import_df.head(5), use_container_width=True, hide_index=True)
+                    
+                    if st.button("📥 Oppdater laginndeling med denne filen", type="primary"):
+                        oppdatert_teller = 0
+                        for _, rad in import_df.iterrows():
+                            pid = str(rad["ID"]).strip()
+                            nytt_lag = str(rad["Lag"]).strip()
+                            
+                            if pid in st.session_state.df["ID"].values:
+                                idx = st.session_state.df.index[st.session_state.df["ID"] == pid].tolist()[0]
+                                if st.session_state.df.at[idx, "Lag"] != nytt_lag:
+                                    st.session_state.df.at[idx, "Lag"] = nytt_lag
+                                    oppdatert_teller += 1
+                        
+                        loggfor_handling("Import", f"Oppdaterte lag for {oppdatert_teller} deltakere via fil.")
+                        lagre_alle_data()
+                        st.success(f"Laginndelingen ble oppdatert for {oppdatert_teller} deltakere!")
+                        st.rerun()
+            except Exception as e:
+                st.error(f"Kunne ikke lese filen: {e}")
+
+    st.markdown("---")
     st.subheader("🖨️ Utskrift og Eksport")
     
     ut_k1, ut_k2, ut_k3, ut_k4 = st.columns(4)
