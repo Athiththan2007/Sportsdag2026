@@ -344,22 +344,71 @@ if side == "📋 Registrering":
 
     st.markdown("---")
     st.subheader("🧹 Opprydding og sikkerhetssjekk")
-    if st.button("Fjern duplikater i systemet automatisk"):
-        originalt_antall = len(st.session_state.df)
+    
+    if st.button("🔍 Skann etter duplikater"):
         midlertidig_df = st.session_state.df.copy()
-        midlertidig_df["Soke_nokkel"] = midlertidig_df["Navn"].str.lower().str.strip() + midlertidig_df["Kategori"]
-        midlertidig_df = midlertidig_df.drop_duplicates(subset=["Soke_nokkel"], keep="first")
-        st.session_state.df = midlertidig_df.drop(columns=["Soke_nokkel"]).reset_index(drop=True)
-        nytt_antall = len(st.session_state.df)
-        forskjell = originalt_antall - nytt_antall
+        midlertidig_df["_sokekode"] = midlertidig_df["Navn"].str.lower().str.strip() + "|" + midlertidig_df["Kategori"]
+        duplikat_mask = midlertidig_df.duplicated(subset=["_sokekode"], keep="first")
+        duplikater = midlertidig_df[duplikat_mask].drop(columns=["_sokekode"])
         
-        if forskjell > 0:
-            loggfor_handling("Opprydding", f"Fjernet {forskjell} duplikater automatisk.")
-            lagre_alle_data()
-            st.success(f"Fjernet {forskjell} dupliserte registreringer.")
+        if duplikater.empty:
+            st.success("✅ Ingen duplikater funnet i systemet.")
         else:
-            st.info("Ingen duplikater ble funnet.")
-        st.rerun()
+            st.session_state["_duplikater_funnet"] = True
+            st.session_state["_duplikat_ider"] = duplikater["ID"].tolist()
+            
+            # Slå sammen med poengdata for full oversikt
+            dup_med_poeng = pd.merge(
+                duplikater[["ID", "Navn", "Kategori", "Kull", "Kjønn", "Avdeling", "Lag"]],
+                st.session_state.poeng_df, on="ID", how="left"
+            ).fillna("0")
+            for ov in ["Øvelse 1", "Øvelse 2", "Øvelse 3"]:
+                dup_med_poeng[ov] = pd.to_numeric(dup_med_poeng[ov], errors="coerce").fillna(0).astype(int)
+            dup_med_poeng["Totalt"] = dup_med_poeng["Øvelse 1"] + dup_med_poeng["Øvelse 2"] + dup_med_poeng["Øvelse 3"]
+            
+            st.warning(f"⚠️ Fant **{len(duplikater)} duplikater** som vil bli fjernet:")
+            
+            # Oppsummering
+            kat_tell = duplikater["Kategori"].value_counts()
+            avd_tell = duplikater["Avdeling"].value_counts()
+            med_lag = len(duplikater[duplikater["Lag"] != ""])
+            med_poeng = len(dup_med_poeng[dup_med_poeng["Totalt"] > 0])
+            
+            opps_k1, opps_k2, opps_k3, opps_k4 = st.columns(4)
+            with opps_k1:
+                st.metric("Totalt duplikater", f"{len(duplikater)} stk")
+            with opps_k2:
+                st.metric("Har lagfordeling", f"{med_lag} stk")
+            with opps_k3:
+                st.metric("Har poeng", f"{med_poeng} stk")
+            with opps_k4:
+                st.metric("Kategorier", ", ".join(f"{k}: {v}" for k, v in kat_tell.items()))
+            
+            with st.expander("📋 Se full liste over duplikater som fjernes", expanded=True):
+                vis_kols = ["ID", "Navn", "Kategori", "Avdeling", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
+                st.dataframe(dup_med_poeng[vis_kols], use_container_width=True, hide_index=True)
+    
+    # Bekreftelsesknapp (vises kun etter skanning)
+    if st.session_state.get("_duplikater_funnet", False):
+        dup_ider = st.session_state.get("_duplikat_ider", [])
+        if dup_ider:
+            if st.button(f"🗑️ Bekreft: Fjern {len(dup_ider)} duplikater permanent", type="primary"):
+                midlertidig_df = st.session_state.df.copy()
+                midlertidig_df["_sokekode"] = midlertidig_df["Navn"].str.lower().str.strip() + "|" + midlertidig_df["Kategori"]
+                midlertidig_df = midlertidig_df.drop_duplicates(subset=["_sokekode"], keep="first")
+                st.session_state.df = midlertidig_df.drop(columns=["_sokekode"]).reset_index(drop=True)
+                
+                # Rydd opp poeng for fjernede IDer
+                gjenværende_ider = set(st.session_state.df["ID"].tolist())
+                st.session_state.poeng_df = st.session_state.poeng_df[st.session_state.poeng_df["ID"].isin(gjenværende_ider)].reset_index(drop=True)
+                
+                loggfor_handling("Opprydding", f"Fjernet {len(dup_ider)} duplikater med forhåndsvisning og bekreftelse.")
+                lagre_alle_data()
+                
+                st.session_state["_duplikater_funnet"] = False
+                st.session_state["_duplikat_ider"] = []
+                st.success(f"Fjernet {len(dup_ider)} duplikater og ryddet tilhørende poengdata.")
+                st.rerun()
 
     st.markdown("---")
     st.subheader("🚨 Faresone - Nullstill systemet fullstendig")
@@ -445,14 +494,36 @@ elif side == "🏁 Laginndeling":
             lagre_alle_data()
             st.rerun()
 
-    # ── Utskrift og Eksport ──────────────────────────────────────────────
+    # ── Utskrift og Eksport (avansert filtrering og sortering) ──────────
     st.markdown("---")
     st.subheader("🖨️ Utskrift og Eksport")
-    utskrift_avd = st.multiselect("Velg avdeling for HTML-utskrift og CSV (Gjelder kun for eksport):", AVDELINGER, default=AVDELINGER, key="print_avd")
+    
+    ut_k1, ut_k2, ut_k3, ut_k4 = st.columns(4)
+    with ut_k1:
+        utskrift_avd = st.multiselect("Avdeling", AVDELINGER, default=AVDELINGER, key="print_avd")
+    with ut_k2:
+        utskrift_kat = st.multiselect("Kategori", KATEGORIER, default=["Elev"], key="print_kat")
+    with ut_k3:
+        alle_print_kull = sorted([k for k in st.session_state.df["Kull"].unique() if str(k).strip() != ""])
+        utskrift_kull = st.multiselect("Kull / Årskull", alle_print_kull, default=alle_print_kull, key="print_kull")
+    with ut_k4:
+        sortering = st.selectbox("Sorter etter", ["Navn", "Kull", "Avdeling", "Kjønn", "ID"], key="print_sort")
+    
+    # Bygg eksport-datasettet
+    eksport_mask = (
+        (st.session_state.df["Lag"] != "") & 
+        (st.session_state.df["Avdeling"].isin(utskrift_avd)) &
+        (st.session_state.df["Kategori"].isin(utskrift_kat))
+    )
+    if utskrift_kull:
+        eksport_mask &= (st.session_state.df["Kull"].isin(utskrift_kull) | (st.session_state.df["Kull"] == ""))
+    
+    eksport_df = st.session_state.df[eksport_mask].sort_values(by=sortering).reset_index(drop=True)
+    
+    st.caption(f"Utvalget inneholder {len(eksport_df)} deltakere fra {len(utskrift_avd)} avdeling(er) og {len(utskrift_kat)} kategori(er).")
     
     eks_kol1, eks_kol2 = st.columns(2)
     with eks_kol1:
-        eksport_df = st.session_state.df[(st.session_state.df["Lag"] != "") & (st.session_state.df["Avdeling"].isin(utskrift_avd))]
         csv_data = eksport_df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
             "💾 Last ned CSV-eksport", 
@@ -460,11 +531,15 @@ elif side == "🏁 Laginndeling":
             mime="text/csv", use_container_width=True
         )
     with eks_kol2:
-        df_a_print = st.session_state.df[(st.session_state.df["Lag"] == LAG_A) & (st.session_state.df["Avdeling"].isin(utskrift_avd))]
-        df_b_print = st.session_state.df[(st.session_state.df["Lag"] == LAG_B) & (st.session_state.df["Avdeling"].isin(utskrift_avd))]
+        df_a_print = eksport_df[eksport_df["Lag"] == LAG_A]
+        df_b_print = eksport_df[eksport_df["Lag"] == LAG_B]
         
-        rader_a = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_a_print.iterrows())
-        rader_b = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_b_print.iterrows())
+        filter_tekst = f"Avdeling: {', '.join(utskrift_avd)} | Kategori: {', '.join(utskrift_kat)} | Sortert etter: {sortering}"
+        if utskrift_kull and len(utskrift_kull) < len(alle_print_kull):
+            filter_tekst += f" | Kull: {', '.join(utskrift_kull)}"
+        
+        rader_a = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kategori']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_a_print.iterrows())
+        rader_b = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kategori']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_b_print.iterrows())
         
         html_print = f"""<!DOCTYPE html>
 <html>
@@ -474,7 +549,8 @@ elif side == "🏁 Laginndeling":
     <style>
         body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6f9; color: #2c3e50; padding: 40px; margin: 0; }}
         .container {{ max-width: 900px; margin: 0 auto; background: #ffffff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }}
-        h1 {{ text-align: center; color: #1a252f; border-bottom: 3px solid #3498db; padding-bottom: 15px; margin-bottom: 40px; text-transform: uppercase; letter-spacing: 1px; }}
+        h1 {{ text-align: center; color: #1a252f; border-bottom: 3px solid #3498db; padding-bottom: 15px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }}
+        .filter-info {{ text-align: center; color: #7f8c8d; font-size: 13px; margin-bottom: 30px; }}
         .team-header {{ display: flex; align-items: center; margin-top: 40px; margin-bottom: 20px; }}
         .team-header h2 {{ margin: 0; padding-left: 15px; font-size: 24px; color: #2c3e50; border-left: 5px solid; }}
         .red-team h2 {{ border-color: #e74c3c; }}
@@ -490,12 +566,13 @@ elif side == "🏁 Laginndeling":
 <body>
     <div class="container">
         <h1>Sportsfestival 2026 — Lagfordeling</h1>
+        <p class="filter-info">{filter_tekst}</p>
         
         <div class="team-header red-team">
             <h2>🔴 {LAG_A} ({len(df_a_print)} deltakere)</h2>
         </div>
         <table>
-            <tr><th>ID</th><th>Navn</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+            <tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
             {rader_a}
         </table>
         
@@ -503,7 +580,7 @@ elif side == "🏁 Laginndeling":
             <h2>🟡 {LAG_B} ({len(df_b_print)} deltakere)</h2>
         </div>
         <table>
-            <tr><th>ID</th><th>Navn</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+            <tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
             {rader_b}
         </table>
     </div>
@@ -601,118 +678,139 @@ elif side == "🎯 Poeng & Resultater":
             "⚔️ Lagpoeng"
         ])
         
-        elever_df = st.session_state.df[st.session_state.df["Kategori"] == "Elev"]
-        alle_kull = sorted([k for k in elever_df["Kull"].unique() if k.strip() != ""])
+        alle_deltakere_df = st.session_state.df.copy()
+        alle_kull = sorted([k for k in alle_deltakere_df["Kull"].unique() if str(k).strip() != ""])
 
         with poeng_fane1:
             st.subheader("Registrer poeng for øvelser")
             st.write("Huk av «Nullstill poeng ⚠️» for å slette poengene til en enkelt deltaker.")
             
-            p_kol1, p_kol2 = st.columns(2)
+            p_kol1, p_kol2, p_kol3 = st.columns(3)
             with p_kol1:
-                valgt_kull = st.selectbox("Velg Kull", [""] + alle_kull, key="poeng_kull")
+                poeng_kat = st.selectbox("Kategori", ["Alle"] + KATEGORIER, key="poeng_kat")
             with p_kol2:
-                valgt_kjonn = st.selectbox("Filtrer på kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="poeng_kjonn")
+                valgt_kull = st.selectbox("Kull (valgfritt)", ["Alle"] + alle_kull, key="poeng_kull")
+            with p_kol3:
+                valgt_kjonn = st.selectbox("Kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="poeng_kjonn")
+            
+            # Bygg filter
+            poeng_mask = pd.Series(True, index=alle_deltakere_df.index)
+            if poeng_kat != "Alle":
+                poeng_mask &= alle_deltakere_df["Kategori"] == poeng_kat
+            if valgt_kull != "Alle":
+                poeng_mask &= alle_deltakere_df["Kull"] == valgt_kull
+            if valgt_kjonn != "Alle":
+                poeng_mask &= alle_deltakere_df["Kjønn"] == valgt_kjonn
+            
+            aktuelle = alle_deltakere_df[poeng_mask][["ID", "Navn", "Kategori", "Kjønn"]].copy()
+            
+            if poeng_kat == "Alle" and valgt_kull == "Alle":
+                st.info("Velg minst en kategori eller et kull for å føre inn poeng.")
+            elif aktuelle.empty:
+                st.info("Ingen deltakere matcher det valgte filteret.")
+            else:
+                redigerings_df = pd.merge(aktuelle, st.session_state.poeng_df, on="ID", how="left").fillna("0")
+                redigerings_df["Kjønn"] = redigerings_df["Kjønn"].replace("0", "")
+                redigerings_df["Kategori"] = redigerings_df["Kategori"].replace("0", "")
+                redigerings_df["Nullstill"] = False
                 
-            if valgt_kull:
-                if valgt_kjonn == "Alle":
-                    aktuelle_elever = elever_df[elever_df["Kull"] == valgt_kull][["ID", "Navn", "Kjønn"]].copy()
-                else:
-                    aktuelle_elever = elever_df[
-                        (elever_df["Kull"] == valgt_kull) & (elever_df["Kjønn"] == valgt_kjonn)
-                    ][["ID", "Navn", "Kjønn"]].copy()
+                redigert_data = st.data_editor(
+                    redigerings_df,
+                    column_config={
+                        "ID": st.column_config.TextColumn("ID", disabled=True, width="small"),
+                        "Navn": st.column_config.TextColumn("Navn", disabled=True),
+                        "Kategori": st.column_config.TextColumn("Kategori", disabled=True, width="small"),
+                        "Kjønn": st.column_config.SelectboxColumn("Kjønn", options=["", "Gutt", "Jente"], width="small"),
+                        "Øvelse 1": st.column_config.TextColumn("Øvelse 1", width="small"),
+                        "Øvelse 2": st.column_config.TextColumn("Øvelse 2", width="small"),
+                        "Øvelse 3": st.column_config.TextColumn("Øvelse 3", width="small"),
+                        "Nullstill": st.column_config.CheckboxColumn("Nullstill poeng ⚠️", default=False, width="small")
+                    },
+                    hide_index=True,
+                    use_container_width=True,
+                    key="poeng_editor"
+                )
                 
-                if aktuelle_elever.empty:
-                    st.info("Fant ingen registrerte elever i dette kullet.")
-                else:
-                    redigerings_df = pd.merge(aktuelle_elever, st.session_state.poeng_df, on="ID", how="left").fillna("0")
-                    redigerings_df["Kjønn"] = redigerings_df["Kjønn"].replace("0", "")
-                    redigerings_df["Nullstill"] = False
+                if st.button("💾 Lagre poeng og endringer", type="primary"):
+                    endret_kjonn_teller = 0
+                    resatt_teller = 0
                     
-                    redigert_data = st.data_editor(
-                        redigerings_df,
-                        column_config={
-                            "ID": st.column_config.TextColumn("ID", disabled=True, width="small"),
-                            "Navn": st.column_config.TextColumn("Navn", disabled=True),
-                            "Kjønn": st.column_config.SelectboxColumn("Kjønn", options=["", "Gutt", "Jente"], width="small"),
-                            "Øvelse 1": st.column_config.TextColumn("Øvelse 1", width="small"),
-                            "Øvelse 2": st.column_config.TextColumn("Øvelse 2", width="small"),
-                            "Øvelse 3": st.column_config.TextColumn("Øvelse 3", width="small"),
-                            "Nullstill": st.column_config.CheckboxColumn("Nullstill poeng ⚠️", default=False, width="small")
-                        },
-                        hide_index=True,
-                        use_container_width=True,
-                        key="poeng_editor"
-                    )
-                    
-                    if st.button("💾 Lagre poeng og endringer", type="primary"):
-                        endret_kjonn_teller = 0
-                        resatt_teller = 0
+                    for _, rad in redigert_data.iterrows():
+                        pid = rad["ID"]
                         
-                        for _, rad in redigert_data.iterrows():
-                            pid = rad["ID"]
-                            
-                            main_idx = st.session_state.df.index[st.session_state.df["ID"] == pid].tolist()
-                            if main_idx:
-                                gammelt_kjonn = st.session_state.df.at[main_idx[0], "Kjønn"]
-                                nytt_kjonn = rad["Kjønn"] if pd.notna(rad["Kjønn"]) else ""
-                                if gammelt_kjonn != nytt_kjonn:
-                                    st.session_state.df.at[main_idx[0], "Kjønn"] = nytt_kjonn
-                                    endret_kjonn_teller += 1
-                            
-                            poeng_idx = st.session_state.poeng_df.index[st.session_state.poeng_df["ID"] == pid].tolist()
-                            skal_resettes = rad.get("Nullstill", False)
-                            
-                            if skal_resettes:
-                                if poeng_idx:
-                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = "0"
-                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = "0"
-                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = "0"
-                                resatt_teller += 1
+                        main_idx = st.session_state.df.index[st.session_state.df["ID"] == pid].tolist()
+                        if main_idx:
+                            gammelt_kjonn = st.session_state.df.at[main_idx[0], "Kjønn"]
+                            nytt_kjonn = rad["Kjønn"] if pd.notna(rad["Kjønn"]) else ""
+                            if gammelt_kjonn != nytt_kjonn:
+                                st.session_state.df.at[main_idx[0], "Kjønn"] = nytt_kjonn
+                                endret_kjonn_teller += 1
+                        
+                        poeng_idx = st.session_state.poeng_df.index[st.session_state.poeng_df["ID"] == pid].tolist()
+                        skal_resettes = rad.get("Nullstill", False)
+                        
+                        if skal_resettes:
+                            if poeng_idx:
+                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = "0"
+                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = "0"
+                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = "0"
+                            resatt_teller += 1
+                        else:
+                            if poeng_idx:
+                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = rad["Øvelse 1"]
+                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = rad["Øvelse 2"]
+                                st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = rad["Øvelse 3"]
                             else:
-                                if poeng_idx:
-                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 1"] = rad["Øvelse 1"]
-                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 2"] = rad["Øvelse 2"]
-                                    st.session_state.poeng_df.at[poeng_idx[0], "Øvelse 3"] = rad["Øvelse 3"]
-                                else:
-                                    ny_poeng = pd.DataFrame(
-                                        [[pid, rad["Øvelse 1"], rad["Øvelse 2"], rad["Øvelse 3"]]], 
-                                        columns=st.session_state.poeng_kolonner
-                                    )
-                                    st.session_state.poeng_df = pd.concat([st.session_state.poeng_df, ny_poeng], ignore_index=True)
-                        
-                        detalj_tekst = f"Lagret poeng for {valgt_kull}"
-                        if valgt_kjonn != "Alle":
-                            detalj_tekst += f" ({valgt_kjonn})"
-                        if resatt_teller > 0:
-                            detalj_tekst += f" — nullstilt {resatt_teller} stk"
-                        if endret_kjonn_teller > 0:
-                            detalj_tekst += f" — endret kjønn for {endret_kjonn_teller}"
-                        
-                        loggfor_handling("Poeng oppdatert", detalj_tekst)
-                        if lagre_alle_data():
-                            st.success("Poeng og endringer ble lagret i skyen!")
-                            st.rerun()
+                                ny_poeng = pd.DataFrame(
+                                    [[pid, rad["Øvelse 1"], rad["Øvelse 2"], rad["Øvelse 3"]]], 
+                                    columns=st.session_state.poeng_kolonner
+                                )
+                                st.session_state.poeng_df = pd.concat([st.session_state.poeng_df, ny_poeng], ignore_index=True)
+                    
+                    detalj_tekst = f"Lagret poeng"
+                    if poeng_kat != "Alle":
+                        detalj_tekst += f" for {poeng_kat}"
+                    if valgt_kull != "Alle":
+                        detalj_tekst += f" kull {valgt_kull}"
+                    if valgt_kjonn != "Alle":
+                        detalj_tekst += f" ({valgt_kjonn})"
+                    if resatt_teller > 0:
+                        detalj_tekst += f" — nullstilt {resatt_teller} stk"
+                    if endret_kjonn_teller > 0:
+                        detalj_tekst += f" — endret kjønn for {endret_kjonn_teller}"
+                    
+                    loggfor_handling("Poeng oppdatert", detalj_tekst)
+                    if lagre_alle_data():
+                        st.success("Poeng og endringer ble lagret i skyen!")
+                        st.rerun()
 
         with poeng_fane2:
             st.subheader("Resultattavle og vinnere")
-            r_kol1, r_kol2 = st.columns(2)
+            r_kol1, r_kol2, r_kol3 = st.columns(3)
             with r_kol1:
-                res_kull = st.selectbox("Vis resultater for Kull", [""] + alle_kull, key="res_kull")
+                res_kat = st.selectbox("Kategori", ["Alle"] + KATEGORIER, key="res_kat")
             with r_kol2:
-                res_kjonn = st.selectbox("Filtrer på kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="res_kjonn")
+                res_kull = st.selectbox("Kull", ["Alle"] + alle_kull, key="res_kull")
+            with r_kol3:
+                res_kjonn = st.selectbox("Kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="res_kjonn")
+            
+            if res_kat == "Alle" and res_kull == "Alle":
+                st.info("Velg minst en kategori eller et kull for å vise resultater.")
+            else:
+                res_mask = pd.Series(True, index=alle_deltakere_df.index)
+                if res_kat != "Alle":
+                    res_mask &= alle_deltakere_df["Kategori"] == res_kat
+                if res_kull != "Alle":
+                    res_mask &= alle_deltakere_df["Kull"] == res_kull
+                if res_kjonn != "Alle":
+                    res_mask &= alle_deltakere_df["Kjønn"] == res_kjonn
                 
-            if res_kull:
-                if res_kjonn == "Alle":
-                    aktuelle_elever = elever_df[elever_df["Kull"] == res_kull][["ID", "Navn", "Kjønn", "Lag"]]
-                else:
-                    aktuelle_elever = elever_df[
-                        (elever_df["Kull"] == res_kull) & (elever_df["Kjønn"] == res_kjonn)
-                    ][["ID", "Navn", "Kjønn", "Lag"]]
+                aktuelle_res = alle_deltakere_df[res_mask][["ID", "Navn", "Kategori", "Kjønn", "Lag"]]
                 
-                res_df = pd.merge(aktuelle_elever, st.session_state.poeng_df, on="ID", how="left").fillna("0")
+                res_df = pd.merge(aktuelle_res, st.session_state.poeng_df, on="ID", how="left").fillna("0")
                 res_df["Kjønn"] = res_df["Kjønn"].replace("0", "")
                 res_df["Lag"] = res_df["Lag"].replace("0", "")
+                res_df["Kategori"] = res_df["Kategori"].replace("0", "")
                 
                 for ov in ["Øvelse 1", "Øvelse 2", "Øvelse 3"]:
                     res_df[ov] = pd.to_numeric(res_df[ov], errors='coerce').fillna(0)
@@ -735,20 +833,20 @@ elif side == "🎯 Poeng & Resultater":
                             st.warning(f"**🥉 3. plass**\n\n{res_df.at[2, 'Navn']} ({int(res_df.at[2, 'Totalt'])} poeng)")
                     
                     st.markdown("### Hele poengtabellen")
-                    vis_kolonner = ["ID", "Navn", "Kjønn", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
+                    vis_kolonner = ["ID", "Navn", "Kategori", "Kjønn", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
                     st.dataframe(res_df[vis_kolonner], use_container_width=True, hide_index=True)
 
         with poeng_fane3:
             st.subheader("⚔️ Lagsammenligning — Rød vs Gul")
             
-            lag_elever = st.session_state.df[
-                (st.session_state.df["Kategori"] == "Elev") & (st.session_state.df["Lag"] != "")
-            ][["ID", "Navn", "Kull", "Lag"]].copy()
+            lag_deltakere = st.session_state.df[
+                (st.session_state.df["Lag"] != "")
+            ][["ID", "Navn", "Kategori", "Kull", "Lag"]].copy()
             
-            if lag_elever.empty:
-                st.info("Ingen elever er fordelt i lag ennå. Gå til Laginndeling først.")
+            if lag_deltakere.empty:
+                st.info("Ingen deltakere er fordelt i lag ennå. Gå til Laginndeling først.")
             else:
-                lag_med_poeng = pd.merge(lag_elever, st.session_state.poeng_df, on="ID", how="left").fillna("0")
+                lag_med_poeng = pd.merge(lag_deltakere, st.session_state.poeng_df, on="ID", how="left").fillna("0")
                 for ov in ["Øvelse 1", "Øvelse 2", "Øvelse 3"]:
                     lag_med_poeng[ov] = pd.to_numeric(lag_med_poeng[ov], errors='coerce').fillna(0)
                 lag_med_poeng["Totalt"] = lag_med_poeng["Øvelse 1"] + lag_med_poeng["Øvelse 2"] + lag_med_poeng["Øvelse 3"]
@@ -787,11 +885,11 @@ elif side == "🎯 Poeng & Resultater":
                 d_kol1, d_kol2 = st.columns(2)
                 with d_kol1:
                     st.markdown(f"#### 🔴 {LAG_A} — Individuelle bidrag")
-                    rod_vis = rod_df[["ID", "Navn", "Kull", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]].sort_values("Totalt", ascending=False).reset_index(drop=True)
+                    rod_vis = rod_df[["ID", "Navn", "Kategori", "Kull", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]].sort_values("Totalt", ascending=False).reset_index(drop=True)
                     st.dataframe(rod_vis, use_container_width=True, hide_index=True)
                 with d_kol2:
                     st.markdown(f"#### 🟡 {LAG_B} — Individuelle bidrag")
-                    gul_vis = gul_df[["ID", "Navn", "Kull", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]].sort_values("Totalt", ascending=False).reset_index(drop=True)
+                    gul_vis = gul_df[["ID", "Navn", "Kategori", "Kull", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]].sort_values("Totalt", ascending=False).reset_index(drop=True)
                     st.dataframe(gul_vis, use_container_width=True, hide_index=True)
                 
                 st.markdown("---")
