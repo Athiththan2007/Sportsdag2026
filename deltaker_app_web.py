@@ -5,6 +5,12 @@ import io
 from datetime import datetime
 from github import Github
 
+try:
+    from xhtml2pdf import pisa
+    PDF_TILGJENGELIG = True
+except ImportError:
+    PDF_TILGJENGELIG = False
+
 KATEGORIER = ["Elev", "நிர்வாகம்", "Lærer", "Frivillig", "Gjest"]
 AVDELINGER = ["Ålesund", "Ulsteinvik", "Florø"]
 LAG_A = "Lag Rød"
@@ -522,75 +528,313 @@ elif side == "🏁 Laginndeling":
     
     st.caption(f"Utvalget inneholder {len(eksport_df)} deltakere fra {len(utskrift_avd)} avdeling(er) og {len(utskrift_kat)} kategori(er).")
     
-    eks_kol1, eks_kol2 = st.columns(2)
+    eks_kol1, eks_kol2, eks_kol3 = st.columns(3)
     with eks_kol1:
         csv_data = eksport_df.to_csv(index=False, encoding="utf-8-sig")
         st.download_button(
-            "💾 Last ned CSV-eksport", 
+            "💾 Last ned CSV", 
             data=csv_data, file_name="lagfordeling.csv", 
             mime="text/csv", use_container_width=True
         )
-    with eks_kol2:
-        df_a_print = eksport_df[eksport_df["Lag"] == LAG_A]
-        df_b_print = eksport_df[eksport_df["Lag"] == LAG_B]
-        
-        filter_tekst = f"Avdeling: {', '.join(utskrift_avd)} | Kategori: {', '.join(utskrift_kat)} | Sortert etter: {sortering}"
-        if utskrift_kull and len(utskrift_kull) < len(alle_print_kull):
-            filter_tekst += f" | Kull: {', '.join(utskrift_kull)}"
-        
-        rader_a = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kategori']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_a_print.iterrows())
-        rader_b = "".join(f"<tr><td>{r['ID']}</td><td>{r['Navn']}</td><td>{r['Kategori']}</td><td>{r['Kull']}</td><td>{r['Kjønn']}</td><td><span class='badge'>{r['Avdeling']}</span></td></tr>" for _, r in df_b_print.iterrows())
-        
-        html_print = f"""<!DOCTYPE html>
+    
+    # ── Bygg felles data ─────────────────────────────────────────────────
+    df_a_print = eksport_df[eksport_df["Lag"] == LAG_A]
+    df_b_print = eksport_df[eksport_df["Lag"] == LAG_B]
+    
+    filter_tekst = f"Avdeling: {', '.join(utskrift_avd)} · Kategori: {', '.join(utskrift_kat)} · Sortert: {sortering}"
+    if utskrift_kull and len(utskrift_kull) < len(alle_print_kull):
+        filter_tekst += f" · Kull: {', '.join(utskrift_kull)}"
+    
+    def bygg_rader(df_team, farge_stripe1, farge_stripe2):
+        rader = ""
+        for i, (_, r) in enumerate(df_team.iterrows()):
+            bg = farge_stripe1 if i % 2 == 0 else farge_stripe2
+            rader += f'<tr style="background:{bg}"><td style="font-weight:600;color:#64748b">{r["ID"]}</td><td>{r["Navn"]}</td><td><span class="kat-badge">{r["Kategori"]}</span></td><td>{r["Kull"]}</td><td>{r["Kjønn"]}</td><td><span class="avd-badge">{r["Avdeling"]}</span></td></tr>'
+        return rader
+    
+    rader_a = bygg_rader(df_a_print, "#ffffff", "#fef2f2")
+    rader_b = bygg_rader(df_b_print, "#ffffff", "#fefce8")
+    
+    # ── Moderne HTML/PDF-mal ─────────────────────────────────────────────
+    glossy_html = f"""<!DOCTYPE html>
 <html>
 <head>
-    <meta charset="utf-8">
-    <title>Laginndeling 2026</title>
-    <style>
-        body {{ font-family: 'Segoe UI', Roboto, Helvetica, Arial, sans-serif; background-color: #f4f6f9; color: #2c3e50; padding: 40px; margin: 0; }}
-        .container {{ max-width: 900px; margin: 0 auto; background: #ffffff; padding: 40px; border-radius: 12px; box-shadow: 0 4px 15px rgba(0,0,0,0.05); }}
-        h1 {{ text-align: center; color: #1a252f; border-bottom: 3px solid #3498db; padding-bottom: 15px; margin-bottom: 10px; text-transform: uppercase; letter-spacing: 1px; }}
-        .filter-info {{ text-align: center; color: #7f8c8d; font-size: 13px; margin-bottom: 30px; }}
-        .team-header {{ display: flex; align-items: center; margin-top: 40px; margin-bottom: 20px; }}
-        .team-header h2 {{ margin: 0; padding-left: 15px; font-size: 24px; color: #2c3e50; border-left: 5px solid; }}
-        .red-team h2 {{ border-color: #e74c3c; }}
-        .yellow-team h2 {{ border-color: #f1c40f; }}
-        table {{ width: 100%; border-collapse: collapse; margin-bottom: 20px; font-size: 15px; }}
-        th, td {{ padding: 12px 15px; text-align: left; border-bottom: 1px solid #e2e8f0; }}
-        th {{ background-color: #f8fafc; font-weight: 600; color: #475569; text-transform: uppercase; font-size: 13px; letter-spacing: 0.5px; }}
-        tr:nth-child(even) {{ background-color: #fcfcfc; }}
-        .badge {{ display: inline-block; padding: 4px 8px; border-radius: 12px; font-size: 12px; font-weight: bold; background: #e2e8f0; color: #475569; }}
-        @media print {{ body {{ padding: 0; background-color: #ffffff; }} .container {{ box-shadow: none; padding: 0; }} }}
-    </style>
+<meta charset="utf-8">
+<title>Sportsfestival 2026 — Lagfordeling</title>
+<style>
+@page {{
+    size: A4 portrait;
+    margin: 18mm 15mm 18mm 15mm;
+}}
+* {{ margin: 0; padding: 0; box-sizing: border-box; }}
+body {{
+    font-family: 'Segoe UI', 'Helvetica Neue', Arial, sans-serif;
+    color: #1e293b;
+    font-size: 11px;
+    line-height: 1.5;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+}}
+
+/* ── Header ────────────────────────────────────── */
+.header {{
+    background: linear-gradient(135deg, #0f172a 0%, #1e3a5f 50%, #1e40af 100%);
+    color: white;
+    padding: 28px 32px 22px;
+    border-radius: 16px;
+    margin-bottom: 8px;
+    text-align: center;
+    position: relative;
+    overflow: hidden;
+}}
+.header::before {{
+    content: '';
+    position: absolute;
+    top: -40%; left: -20%;
+    width: 140%; height: 180%;
+    background: radial-gradient(ellipse at 30% 20%, rgba(255,255,255,0.08) 0%, transparent 60%);
+}}
+.header h1 {{
+    font-size: 22px;
+    font-weight: 700;
+    letter-spacing: 1.5px;
+    text-transform: uppercase;
+    margin-bottom: 4px;
+    position: relative;
+}}
+.header .subtitle {{
+    font-size: 11px;
+    color: rgba(255,255,255,0.7);
+    letter-spacing: 0.5px;
+    font-weight: 400;
+    position: relative;
+}}
+.header .year {{
+    font-size: 42px;
+    font-weight: 800;
+    color: rgba(255,255,255,0.08);
+    position: absolute;
+    right: 30px;
+    top: 12px;
+    letter-spacing: 4px;
+}}
+
+/* ── Filterlinje ───────────────────────────────── */
+.filter-bar {{
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 10px;
+    padding: 8px 16px;
+    margin-bottom: 16px;
+    font-size: 9px;
+    color: #64748b;
+    text-align: center;
+    letter-spacing: 0.3px;
+}}
+
+/* ── Statistikk-kort ──────────────────────────── */
+.stats-row {{
+    display: flex;
+    gap: 10px;
+    margin-bottom: 16px;
+}}
+.stat-card {{
+    flex: 1;
+    background: #f8fafc;
+    border: 1px solid #e2e8f0;
+    border-radius: 12px;
+    padding: 12px 14px;
+    text-align: center;
+}}
+.stat-card .number {{
+    font-size: 22px;
+    font-weight: 700;
+    color: #0f172a;
+}}
+.stat-card .label {{
+    font-size: 9px;
+    color: #94a3b8;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    margin-top: 2px;
+}}
+.stat-red .number {{ color: #dc2626; }}
+.stat-yellow .number {{ color: #d97706; }}
+
+/* ── Lag-seksjon ───────────────────────────────── */
+.team-section {{
+    margin-bottom: 18px;
+    border-radius: 14px;
+    overflow: hidden;
+    border: 1px solid #e2e8f0;
+    page-break-inside: avoid;
+}}
+.team-header-red {{
+    background: linear-gradient(135deg, #991b1b 0%, #dc2626 100%);
+    color: white;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}}
+.team-header-yellow {{
+    background: linear-gradient(135deg, #92400e 0%, #d97706 100%);
+    color: white;
+    padding: 12px 20px;
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+}}
+.team-header-red h2, .team-header-yellow h2 {{
+    font-size: 15px;
+    font-weight: 700;
+    letter-spacing: 0.5px;
+    margin: 0;
+}}
+.team-count {{
+    background: rgba(255,255,255,0.2);
+    padding: 3px 12px;
+    border-radius: 20px;
+    font-size: 11px;
+    font-weight: 600;
+}}
+
+/* ── Tabell ────────────────────────────────────── */
+table {{
+    width: 100%;
+    border-collapse: collapse;
+    font-size: 10.5px;
+}}
+th {{
+    background: #f1f5f9;
+    color: #475569;
+    font-weight: 600;
+    font-size: 9px;
+    text-transform: uppercase;
+    letter-spacing: 0.6px;
+    padding: 8px 12px;
+    text-align: left;
+    border-bottom: 2px solid #e2e8f0;
+}}
+td {{
+    padding: 7px 12px;
+    border-bottom: 1px solid #f1f5f9;
+    color: #334155;
+}}
+.kat-badge {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 600;
+    background: #ede9fe;
+    color: #6d28d9;
+}}
+.avd-badge {{
+    display: inline-block;
+    padding: 2px 8px;
+    border-radius: 10px;
+    font-size: 9px;
+    font-weight: 600;
+    background: #e0f2fe;
+    color: #0369a1;
+}}
+
+/* ── Footer ────────────────────────────────────── */
+.footer {{
+    margin-top: 20px;
+    padding-top: 12px;
+    border-top: 1px solid #e2e8f0;
+    display: flex;
+    justify-content: space-between;
+    font-size: 8px;
+    color: #94a3b8;
+}}
+
+@media print {{
+    body {{ margin: 0; }}
+    .team-section {{ page-break-inside: avoid; }}
+}}
+</style>
 </head>
 <body>
-    <div class="container">
-        <h1>Sportsfestival 2026 — Lagfordeling</h1>
-        <p class="filter-info">{filter_tekst}</p>
-        
-        <div class="team-header red-team">
-            <h2>🔴 {LAG_A} ({len(df_a_print)} deltakere)</h2>
-        </div>
-        <table>
-            <tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
-            {rader_a}
-        </table>
-        
-        <div class="team-header yellow-team">
-            <h2>🟡 {LAG_B} ({len(df_b_print)} deltakere)</h2>
-        </div>
-        <table>
-            <tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
-            {rader_b}
-        </table>
+
+<div class="header">
+    <span class="year">2026</span>
+    <h1>Sportsfestival 2026</h1>
+    <div class="subtitle">அன்னை பூபதி தமிழ் கலைக்கூடம் — Lagfordeling</div>
+</div>
+
+<div class="filter-bar">{filter_tekst}</div>
+
+<div class="stats-row">
+    <div class="stat-card">
+        <div class="number">{len(eksport_df)}</div>
+        <div class="label">Totalt i utvalget</div>
     </div>
+    <div class="stat-card stat-red">
+        <div class="number">{len(df_a_print)}</div>
+        <div class="label">Lag Rød</div>
+    </div>
+    <div class="stat-card stat-yellow">
+        <div class="number">{len(df_b_print)}</div>
+        <div class="label">Lag Gul</div>
+    </div>
+    <div class="stat-card">
+        <div class="number">{len(utskrift_avd)}</div>
+        <div class="label">Avdelinger</div>
+    </div>
+</div>
+
+<div class="team-section">
+    <div class="team-header-red">
+        <h2>🔴 {LAG_A}</h2>
+        <span class="team-count">{len(df_a_print)} deltakere</span>
+    </div>
+    <table>
+        <tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+        {rader_a}
+    </table>
+</div>
+
+<div class="team-section">
+    <div class="team-header-yellow">
+        <h2>🟡 {LAG_B}</h2>
+        <span class="team-count">{len(df_b_print)} deltakere</span>
+    </div>
+    <table>
+        <tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+        {rader_b}
+    </table>
+</div>
+
+<div class="footer">
+    <span>Generert av Sportsfestival Admin System</span>
+    <span>Sportsfestival 2026 — அன்னை பூபதி தமிழ் கலைக்கூடம்</span>
+</div>
+
 </body>
 </html>"""
+    
+    with eks_kol2:
         st.download_button(
-            "🖨️ Last ned HTML for utskrift", 
-            data=html_print, file_name="utskrift_lag.html", 
+            "🌐 Last ned HTML", 
+            data=glossy_html, file_name="lagfordeling.html", 
             mime="text/html", use_container_width=True
         )
+    
+    with eks_kol3:
+        if not PDF_TILGJENGELIG:
+            st.info("Installer xhtml2pdf for PDF: `pip install xhtml2pdf`")
+        else:
+            pdf_buffer = io.BytesIO()
+            pisa.CreatePDF(io.StringIO(glossy_html), dest=pdf_buffer)
+            pdf_bytes = pdf_buffer.getvalue()
+            st.download_button(
+                "📄 Last ned PDF (A4)", 
+                data=pdf_bytes, file_name="lagfordeling.pdf", 
+                mime="application/pdf", use_container_width=True
+            )
 
     # ── Lag-kolonner med pilknapper ──────────────────────────────────────
     st.markdown("---")
