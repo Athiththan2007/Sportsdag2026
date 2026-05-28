@@ -363,7 +363,6 @@ if side == "📋 Registrering":
             st.session_state["_duplikater_funnet"] = True
             st.session_state["_duplikat_ider"] = duplikater["ID"].tolist()
             
-            # Slå sammen med poengdata for full oversikt
             dup_med_poeng = pd.merge(
                 duplikater[["ID", "Navn", "Kategori", "Kull", "Kjønn", "Avdeling", "Lag"]],
                 st.session_state.poeng_df, on="ID", how="left"
@@ -374,7 +373,6 @@ if side == "📋 Registrering":
             
             st.warning(f"⚠️ Fant **{len(duplikater)} duplikater** som vil bli fjernet:")
             
-            # Oppsummering
             kat_tell = duplikater["Kategori"].value_counts()
             avd_tell = duplikater["Avdeling"].value_counts()
             med_lag = len(duplikater[duplikater["Lag"] != ""])
@@ -394,7 +392,6 @@ if side == "📋 Registrering":
                 vis_kols = ["ID", "Navn", "Kategori", "Avdeling", "Lag", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
                 st.dataframe(dup_med_poeng[vis_kols], use_container_width=True, hide_index=True)
     
-    # Bekreftelsesknapp (vises kun etter skanning)
     if st.session_state.get("_duplikater_funnet", False):
         dup_ider = st.session_state.get("_duplikat_ider", [])
         if dup_ider:
@@ -404,7 +401,6 @@ if side == "📋 Registrering":
                 midlertidig_df = midlertidig_df.drop_duplicates(subset=["_sokekode"], keep="first")
                 st.session_state.df = midlertidig_df.drop(columns=["_sokekode"]).reset_index(drop=True)
                 
-                # Rydd opp poeng for fjernede IDer
                 gjenværende_ider = set(st.session_state.df["ID"].tolist())
                 st.session_state.poeng_df = st.session_state.poeng_df[st.session_state.poeng_df["ID"].isin(gjenværende_ider)].reset_index(drop=True)
                 
@@ -441,7 +437,6 @@ elif side == "🏁 Laginndeling":
     st.title("Laginndeling og balansering")
     tilgang_fordel = har_tilgang("las_autofordel")
     
-    # ── Globalt Filter ───────────────────────────────────────────────────
     st.markdown("### 🔍 Filtrer visning")
     f_kol1, f_kol2, f_kol3, f_kol4 = st.columns(4)
     with f_kol1:
@@ -462,7 +457,6 @@ elif side == "🏁 Laginndeling":
     
     filtrert_df = st.session_state.df[f_mask]
     
-    # ── Handlingsknapper ─────────────────────────────────────────────────
     st.markdown("---")
     b_kol1, b_kol2 = st.columns(2)
     with b_kol1:
@@ -500,7 +494,6 @@ elif side == "🏁 Laginndeling":
             lagre_alle_data()
             st.rerun()
 
-    # ── Utskrift og Eksport (avansert filtrering og sortering) ──────────
     st.markdown("---")
     st.subheader("🖨️ Utskrift og Eksport")
     
@@ -515,7 +508,6 @@ elif side == "🏁 Laginndeling":
     with ut_k4:
         sortering = st.selectbox("Sorter etter", ["Navn", "Kull", "Avdeling", "Kjønn", "ID"], key="print_sort")
     
-    # Bygg eksport-datasettet
     eksport_mask = (
         (st.session_state.df["Lag"] != "") & 
         (st.session_state.df["Avdeling"].isin(utskrift_avd)) &
@@ -586,17 +578,17 @@ table.data th {{
     text-transform: uppercase;
     letter-spacing: 1.2px;
     color: #999;
-    padding: 6px 8px 4px 0;
+    padding: 4px;
     text-align: left;
     border-bottom: 1px solid #ddd;
 }}
 table.data td {{
-    padding: 5px 8px 5px 0;
+    padding: 4px;
     border-bottom: 1px solid #f0f0f0;
     font-size: 10px;
     color: #333;
 }}
-table.data td.id {{ color: #bbb; font-size: 9px; width: 30px; }}
+table.data td.id {{ color: #bbb; font-size: 9px; }}
 table.data td.navn {{ font-weight: 500; color: #111; }}
 
 .footer {{
@@ -650,7 +642,6 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
             pisa.CreatePDF(io.StringIO(dok_html), dest=buf)
             st.download_button("📄 PDF", data=buf.getvalue(), file_name="lagfordeling.pdf", mime="application/pdf", use_container_width=True)
 
-    # ── Lag-kolonner med pilknapper ──────────────────────────────────────
     st.markdown("---")
     
     df_rod = filtrert_df[filtrert_df["Lag"] == LAG_A].reset_index()
@@ -751,7 +742,6 @@ elif side == "🎯 Poeng & Resultater":
             with p_kol3:
                 valgt_kjonn = st.selectbox("Kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="poeng_kjonn")
             
-            # Bygg filter
             poeng_mask = pd.Series(True, index=alle_deltakere_df.index)
             if poeng_kat != "Alle":
                 poeng_mask &= alle_deltakere_df["Kategori"] == poeng_kat
