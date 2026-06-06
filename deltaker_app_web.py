@@ -579,7 +579,7 @@ elif side == "🏁 Laginndeling":
     def _rader(df_lag):
         r = ""
         for i, (_, p) in enumerate(df_lag.iterrows()):
-            r += f'<tr><td class="id">{p["ID"]}</td><td class="navn">{p["Navn"]}</td><td>{p["Kategori"]}</td><td>{p["Kull"]}</td><td>{p["Kjønn"]}</td><td>{p["Avdeling"]}</td></tr>'
+            r += f'<tr><td class="id">{p["ID"]}</td><td class="navn">{p["Navn"]}</td><td>{p["Kull"]}</td><td>{p["Avdeling"]}</td></tr>'
         return r
     
     dok_html = f"""<!DOCTYPE html>
@@ -662,13 +662,13 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
 
 <div class="team-label team-label-red">{LAG_A} <span>{len(df_a_print)} deltakere</span></div>
 <table class="data">
-<tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+<tr><th>ID</th><th>Navn</th><th>Kull</th><th>Avdeling</th></tr>
 {_rader(df_a_print)}
 </table>
 
 <div class="team-label team-label-yel">{LAG_B} <span>{len(df_b_print)} deltakere</span></div>
 <table class="data">
-<tr><th>ID</th><th>Navn</th><th>Kategori</th><th>Kull</th><th>Kjønn</th><th>Avdeling</th></tr>
+<tr><th>ID</th><th>Navn</th><th>Kull</th><th>Avdeling</th></tr>
 {_rader(df_b_print)}
 </table>
 
@@ -1008,35 +1008,109 @@ elif side == "🎯 Poeng & Resultater":
 # ═════════════════════════════════════════════════════════════════════════════
 
 elif side == "📊 Informasjon":
-    st.title("Festivalinformasjon og statistikk")
-    total_registrerte = len(st.session_state.df)
-    kategoritelling = st.session_state.df["Kategori"].value_counts()
-    avdelingstelling = st.session_state.df["Avdeling"].value_counts()
-    antall_rod = len(st.session_state.df[st.session_state.df["Lag"] == LAG_A])
-    antall_gul = len(st.session_state.df[st.session_state.df["Lag"] == LAG_B])
-    mangler_lag = len(st.session_state.df[(st.session_state.df["Kategori"] == "Elev") & (st.session_state.df["Lag"] == "")])
-
-    m_kol1, m_kol2, m_kol3 = st.columns(3)
-    with m_kol1:
-        st.metric("Totalt registrerte", f"{total_registrerte} personer")
-        st.metric("Elever på rød", f"{antall_rod} stk")
-    with m_kol2:
-        st.metric("Elever totalt", f"{kategoritelling.get('Elev', 0)} stk")
-        st.metric("Elever på gul", f"{antall_gul} stk")
-    with m_kol3:
-        st.metric("Frivillige mannskap", f"{kategoritelling.get('Frivillig', 0)} stk")
-        st.metric("Mangler laginndeling", f"{mangler_lag} elever")
-
-    st.markdown("---")
-    info_k1, info_k2 = st.columns(2)
-    with info_k1:
-        st.subheader("Fordelt på roller")
+    st.title("📊 Festivalinformasjon")
+    
+    df = st.session_state.df
+    total = len(df)
+    
+    if total == 0:
+        st.info("Ingen deltakere registrert ennå.")
+    else:
+        # ── Hovedtall (rad 1) ────────────────────────────────────────────
+        m1, m2, m3, m4 = st.columns(4)
+        with m1:
+            st.metric("👥 Totalt registrert", f"{total}")
+        with m2:
+            antall_rod = len(df[df["Lag"] == LAG_A])
+            st.metric(f"🔴 På {LAG_A}", f"{antall_rod}")
+        with m3:
+            antall_gul = len(df[df["Lag"] == LAG_B])
+            st.metric(f"🟡 På {LAG_B}", f"{antall_gul}")
+        with m4:
+            ufordelt = len(df[df["Lag"] == ""])
+            st.metric("⚪ Ufordelt på lag", f"{ufordelt}")
+        
+        # ── Sekundærtall (rad 2) ─────────────────────────────────────────
+        m5, m6, m7, m8 = st.columns(4)
+        kategoritelling = df["Kategori"].value_counts()
+        kjonnstelling = df["Kjønn"].value_counts()
+        with m5:
+            st.metric("🎓 Elever", f"{kategoritelling.get('Elev', 0)}")
+        with m6:
+            st.metric("👨‍🏫 Lærere", f"{kategoritelling.get('Lærer', 0)}")
+        with m7:
+            antall_gutt = kjonnstelling.get("Gutt", 0)
+            antall_jente = kjonnstelling.get("Jente", 0)
+            st.metric("♂️ Gutter / ♀️ Jenter", f"{antall_gutt} / {antall_jente}")
+        with m8:
+            elever_uten_lag = len(df[(df["Kategori"] == "Elev") & (df["Lag"] == "")])
+            st.metric("Elever uten lag", f"{elever_uten_lag}")
+        
+        st.markdown("---")
+        
+        # ── Fordeling: Kategori og Avdeling som bar charts ───────────────
+        info_k1, info_k2 = st.columns(2)
+        
+        with info_k1:
+            st.subheader("Fordelt på kategori")
+            kat_data = pd.DataFrame({
+                "Kategori": KATEGORIER,
+                "Antall": [int(kategoritelling.get(k, 0)) for k in KATEGORIER]
+            }).set_index("Kategori")
+            st.bar_chart(kat_data, color="#3498DB", height=240)
+        
+        with info_k2:
+            st.subheader("Fordelt på avdeling")
+            avdelingstelling = df["Avdeling"].value_counts()
+            avd_data = pd.DataFrame({
+                "Avdeling": AVDELINGER,
+                "Antall": [int(avdelingstelling.get(a, 0)) for a in AVDELINGER]
+            }).set_index("Avdeling")
+            st.bar_chart(avd_data, color="#27AE60", height=240)
+        
+        # ── Lagfordeling per avdeling og per kategori ────────────────────
+        st.markdown("---")
+        lag_k1, lag_k2 = st.columns(2)
+        
+        with lag_k1:
+            st.subheader("Lag pr. avdeling")
+            avd_lag = df[df["Lag"] != ""].groupby(["Avdeling", "Lag"]).size().unstack(fill_value=0)
+            if not avd_lag.empty:
+                # Sikre konsistent rekkefølge på lag-kolonner
+                for lag in [LAG_A, LAG_B]:
+                    if lag not in avd_lag.columns:
+                        avd_lag[lag] = 0
+                avd_lag = avd_lag[[LAG_A, LAG_B]]
+                st.bar_chart(avd_lag, color=["#E74C3C", "#F1C40F"], height=240)
+            else:
+                st.caption("Ingen deltakere fordelt på lag ennå.")
+        
+        with lag_k2:
+            st.subheader("Lag pr. kategori")
+            kat_lag = df[df["Lag"] != ""].groupby(["Kategori", "Lag"]).size().unstack(fill_value=0)
+            if not kat_lag.empty:
+                for lag in [LAG_A, LAG_B]:
+                    if lag not in kat_lag.columns:
+                        kat_lag[lag] = 0
+                kat_lag = kat_lag[[LAG_A, LAG_B]]
+                st.bar_chart(kat_lag, color=["#E74C3C", "#F1C40F"], height=240)
+            else:
+                st.caption("Ingen deltakere fordelt på lag ennå.")
+        
+        # ── Detaljert tabellvisning ──────────────────────────────────────
+        st.markdown("---")
+        st.subheader("Detaljert oversikt")
+        
+        # Krysstabell: Avdeling × Kategori
+        krysstab = df.groupby(["Avdeling", "Kategori"]).size().unstack(fill_value=0)
+        # Sikre at alle kategorier vises
         for kat in KATEGORIER:
-            st.write(f"**{kat}**: {kategoritelling.get(kat, 0)} personer")
-    with info_k2:
-        st.subheader("Fordelt på avdeling")
-        for avd in AVDELINGER:
-            st.write(f"**{avd}**: {avdelingstelling.get(avd, 0)} personer")
+            if kat not in krysstab.columns:
+                krysstab[kat] = 0
+        krysstab = krysstab[KATEGORIER]
+        krysstab["Sum"] = krysstab.sum(axis=1)
+        krysstab.loc["Sum"] = krysstab.sum()
+        st.dataframe(krysstab, use_container_width=True)
 
 
 # ═════════════════════════════════════════════════════════════════════════════
