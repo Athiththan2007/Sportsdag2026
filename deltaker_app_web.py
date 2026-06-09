@@ -270,7 +270,9 @@ if side == "📋 Registrering":
             idx = st.session_state.df.index[st.session_state.df["ID"] == valgt_id].tolist()[0]
             
             oppdatert_navn = st.text_input("Navn", st.session_state.df.at[idx, "Navn"])
-            oppdatert_kat = st.selectbox("Kategori", KATEGORIER, index=KATEGORIER.index(st.session_state.df.at[idx, "Kategori"]))
+            nv_kat = st.session_state.df.at[idx, "Kategori"]
+            kat_idx = KATEGORIER.index(nv_kat) if nv_kat in KATEGORIER else 0
+            oppdatert_kat = st.selectbox("Kategori", KATEGORIER, index=kat_idx)
             
             na_avd = st.session_state.df.at[idx, "Avdeling"]
             if na_avd not in AVDELINGER: na_avd = "Ålesund"
@@ -331,50 +333,57 @@ if side == "📋 Registrering":
     )
     
     if opplastet_fil and tilgang_import:
-        try:
-            if opplastet_fil.name.endswith(".xlsx"):
-                ny_df = pd.read_excel(opplastet_fil, dtype=str).fillna("")
-            else:
-                ny_df = pd.read_csv(opplastet_fil, dtype=str).fillna("")
-            
-            st.write(f"Filen inneholder **{len(ny_df)} rader**. Forhåndsvisning:")
-            st.dataframe(ny_df.head(10), use_container_width=True, hide_index=True)
-            
-            if st.button("📥 Importer deltakerne fra filen nå", type="primary"):
-                eksisterende_navn = set(st.session_state.df["Navn"].str.lower().str.strip())
-                importert_teller = 0
-                hoppet_over_teller = 0
+        # Guard: reset import state when a new file is uploaded
+        if st.session_state.get("_import_filnavn") != opplastet_fil.name:
+            st.session_state["_import_filnavn"] = opplastet_fil.name
+            st.session_state["_import_ferdig"] = False
+        
+        if not st.session_state.get("_import_ferdig", False):
+            try:
+                if opplastet_fil.name.endswith(".xlsx"):
+                    ny_df = pd.read_excel(opplastet_fil, dtype=str).fillna("")
+                else:
+                    ny_df = pd.read_csv(opplastet_fil, dtype=str).fillna("")
                 
-                for _, rad in ny_df.iterrows():
-                    importert_navn = rad.get("Navn", "").strip()
-                    if importert_navn:
-                        navn_sjekk = importert_navn.lower()
-                        if navn_sjekk in eksisterende_navn:
-                            hoppet_over_teller += 1
-                            continue
+                st.write(f"Filen inneholder **{len(ny_df)} rader**. Forhåndsvisning:")
+                st.dataframe(ny_df.head(10), use_container_width=True, hide_index=True)
+                
+                if st.button("📥 Importer deltakerne fra filen nå", type="primary"):
+                    eksisterende_navn = set(st.session_state.df["Navn"].str.lower().str.strip())
+                    importert_teller = 0
+                    hoppet_over_teller = 0
+                    
+                    for _, rad in ny_df.iterrows():
+                        importert_navn = rad.get("Navn", "").strip()
+                        if importert_navn:
+                            navn_sjekk = importert_navn.lower()
+                            if navn_sjekk in eksisterende_navn:
+                                hoppet_over_teller += 1
+                                continue
+                                
+                            neste_id = finn_laveste_ledige_id()
+                            neste_id_str = f"{neste_id:02d}"
+                            importert_kat = rad.get("Kategori", "Elev")
+                            importert_avd = rad.get("Avdeling", "Ålesund")
+                            if importert_avd not in AVDELINGER: importert_avd = "Ålesund"
+                            importert_kull = kull_til_gruppe(rad.get("Kull", "")) if importert_kat == "Elev" else ""
+                            importert_kjonn = rad.get("Kjønn", "") if importert_kat == "Elev" else ""
                             
-                        neste_id = finn_laveste_ledige_id()
-                        neste_id_str = f"{neste_id:02d}"
-                        importert_kat = rad.get("Kategori", "Elev")
-                        importert_avd = rad.get("Avdeling", "Ålesund")
-                        if importert_avd not in AVDELINGER: importert_avd = "Ålesund"
-                        importert_kull = kull_til_gruppe(rad.get("Kull", "")) if importert_kat == "Elev" else ""
-                        importert_kjonn = rad.get("Kjønn", "") if importert_kat == "Elev" else ""
-                        
-                        midlertidig_rad = pd.DataFrame(
-                            [[neste_id_str, importert_navn, importert_kat, importert_kull, importert_kjonn, importert_avd, ""]], 
-                            columns=st.session_state.kolonner
-                        )
-                        st.session_state.df = pd.concat([st.session_state.df, midlertidig_rad], ignore_index=True)
-                        eksisterende_navn.add(navn_sjekk)
-                        importert_teller += 1
-                
-                loggfor_handling("Import", f"Importerte {importert_teller} nye. Ignorerte {hoppet_over_teller} duplikater.")
-                lagre_alle_data()
-                st.success(f"La til {importert_teller} nye og hoppet over {hoppet_over_teller} duplikater.")
-                st.rerun()
-        except Exception as e:
-            st.error(f"Kunne ikke tolke filen: {e}")
+                            midlertidig_rad = pd.DataFrame(
+                                [[neste_id_str, importert_navn, importert_kat, importert_kull, importert_kjonn, importert_avd, ""]], 
+                                columns=st.session_state.kolonner
+                            )
+                            st.session_state.df = pd.concat([st.session_state.df, midlertidig_rad], ignore_index=True)
+                            eksisterende_navn.add(navn_sjekk)
+                            importert_teller += 1
+                    
+                    loggfor_handling("Import", f"Importerte {importert_teller} nye. Ignorerte {hoppet_over_teller} duplikater.")
+                    lagre_alle_data()
+                    st.session_state["_import_ferdig"] = True
+                    st.success(f"La til {importert_teller} nye og hoppet over {hoppet_over_teller} duplikater.")
+                    st.rerun()
+            except Exception as e:
+                st.error(f"Kunne ikke tolke filen: {e}")
 
     st.markdown("---")
     st.subheader("Globalt søk og oversikt")
@@ -426,7 +435,6 @@ if side == "📋 Registrering":
             st.warning(f"⚠️ Fant **{len(duplikater)} duplikater** som vil bli fjernet:")
             
             kat_tell = duplikater["Kategori"].value_counts()
-            avd_tell = duplikater["Avdeling"].value_counts()
             med_lag = len(duplikater[duplikater["Lag"] != ""])
             med_poeng = len(dup_med_poeng[dup_med_poeng["Totalt"] > 0])
             
@@ -525,7 +533,10 @@ elif side == "🏁 Laginndeling":
                 antall_a = len(st.session_state.df[st.session_state.df["Lag"] == LAG_A])
                 antall_b = len(st.session_state.df[st.session_state.df["Lag"] == LAG_B])
                 
-                grupper = ufordelte_i_visning.groupby(["Kull", "Kjønn"])
+                tmp = ufordelte_i_visning.copy()
+                tmp["_kull_g"] = tmp["Kull"].fillna("").replace("", "_voksen")
+                tmp["_kjonn_g"] = tmp["Kjønn"].fillna("").replace("", "_ukjent")
+                grupper = tmp.groupby(["_kull_g", "_kjonn_g"])
                 for _, gruppe in grupper:
                     indekser = gruppe.index.tolist()
                     random.shuffle(indekser)
@@ -987,7 +998,7 @@ elif side == "🎯 Poeng & Resultater":
                         st.rerun()
 
         with poeng_fane2:
-            st.subheader("Resultattavle og vinnere")
+            st.subheader("🏆 Resultattavle og vinnere")
             r_kol1, r_kol2, r_kol3 = st.columns(3)
             with r_kol1:
                 res_kat = st.selectbox("Kategori", ["Alle"] + KATEGORIER, key="res_kat")
@@ -1018,32 +1029,81 @@ elif side == "🎯 Poeng & Resultater":
                 res_df["Kategori"] = res_df["Kategori"].replace("0", "")
                 res_df["Kull"] = res_df["Kull"].replace("0", "")
                 
-                # Fargekode lagvisning
-                res_df["Lag"] = res_df["Lag"].fillna("").apply(ikoniser_lag)
-                
                 for ov in ["Øvelse 1", "Øvelse 2", "Øvelse 3"]:
                     res_df[ov] = pd.to_numeric(res_df[ov], errors='coerce').fillna(0)
                 res_df["Totalt"] = res_df["Øvelse 1"] + res_df["Øvelse 2"] + res_df["Øvelse 3"]
-                res_df = res_df.sort_values(by="Totalt", ascending=False).reset_index(drop=True)
                 
                 if res_df.empty or res_df["Totalt"].sum() == 0:
                     st.info("Ingen poeng registrert for denne gruppen ennå.")
                 else:
-                    st.markdown("### 🥇 Pallen")
-                    pall_k1, pall_k2, pall_k3 = st.columns(3)
-                    if len(res_df) > 0 and res_df.at[0, "Totalt"] > 0:
-                        with pall_k1:
-                            st.success(f"**🏆 1. plass**\n\n{res_df.at[0, 'Navn']} ({int(res_df.at[0, 'Totalt'])} poeng)")
-                    if len(res_df) > 1 and res_df.at[1, "Totalt"] > 0:
-                        with pall_k2:
-                            st.info(f"**🥈 2. plass**\n\n{res_df.at[1, 'Navn']} ({int(res_df.at[1, 'Totalt'])} poeng)")
-                    if len(res_df) > 2 and res_df.at[2, "Totalt"] > 0:
-                        with pall_k3:
-                            st.warning(f"**🥉 3. plass**\n\n{res_df.at[2, 'Navn']} ({int(res_df.at[2, 'Totalt'])} poeng)")
+                    # ── CHAMPION ─────────────────────────────────────────────
+                    res_sortert = res_df.sort_values(by="Totalt", ascending=False).reset_index(drop=True)
+                    champion = res_sortert.iloc[0]
                     
+                    st.markdown("---")
+                    st.markdown(f"""
+<div style="background:linear-gradient(135deg,#1a3a5c,#2e75b6);border-radius:12px;padding:20px 28px;margin-bottom:20px;text-align:center">
+<div style="font-size:36px">🏆</div>
+<div style="color:#FFD700;font-size:22px;font-weight:700;letter-spacing:1px">CHAMPION</div>
+<div style="color:white;font-size:28px;font-weight:600;margin:6px 0">{champion['Navn']}</div>
+<div style="color:#aaa;font-size:14px">{int(champion['Totalt'])} poeng totalt · {champion['Kull']} · {champion['Lag']}</div>
+</div>
+""", unsafe_allow_html=True)
+                    
+                    # ── VINNERE PER ØVELSE ────────────────────────────────────
+                    st.markdown("### 🥇 Vinnere per øvelse")
+                    ov_kol1, ov_kol2, ov_kol3 = st.columns(3)
+                    OVELSE_NAMN = ["Øvelse 1", "Øvelse 2", "Øvelse 3"]
+                    OVELSE_FARGER = ["#e74c3c", "#e67e22", "#27ae60"]
+                    
+                    for kol, ov_namn, farge in zip(
+                        [ov_kol1, ov_kol2, ov_kol3],
+                        OVELSE_NAMN,
+                        OVELSE_FARGER
+                    ):
+                        with kol:
+                            ov_sortert = res_df[res_df[ov_namn] > 0].sort_values(by=ov_namn, ascending=False).reset_index(drop=True)
+                            st.markdown(f"**{ov_namn}**")
+                            if ov_sortert.empty:
+                                st.caption("Ingen poeng ennå")
+                            else:
+                                medaljer = ["🥇", "🥈", "🥉"]
+                                for i, (_, row) in enumerate(ov_sortert.head(3).iterrows()):
+                                    plass = medaljer[i] if i < 3 else f"{i+1}."
+                                    poeng = int(row[ov_namn])
+                                    st.markdown(
+                                        f"<div style='padding:6px 10px;margin:3px 0;border-radius:8px;"
+                                        f"background:{farge}18;border-left:3px solid {farge}'>"
+                                        f"<span style='font-size:16px'>{plass}</span> "
+                                        f"<strong>{row['Navn']}</strong> "
+                                        f"<span style='color:#888;font-size:12px'>({poeng} p)</span>"
+                                        f"</div>",
+                                        unsafe_allow_html=True
+                                    )
+                    
+                    # ── TOTALRESULTAT-PALL ────────────────────────────────────
+                    st.markdown("---")
+                    st.markdown("### 🏅 Totalpall")
+                    pall_k1, pall_k2, pall_k3 = st.columns(3)
+                    if len(res_sortert) > 0 and res_sortert.at[0, "Totalt"] > 0:
+                        with pall_k1:
+                            st.success(f"**🥇 1. plass**\n\n{res_sortert.at[0,'Navn']}\n\n**{int(res_sortert.at[0,'Totalt'])} poeng**")
+                    if len(res_sortert) > 1 and res_sortert.at[1, "Totalt"] > 0:
+                        with pall_k2:
+                            st.info(f"**🥈 2. plass**\n\n{res_sortert.at[1,'Navn']}\n\n**{int(res_sortert.at[1,'Totalt'])} poeng**")
+                    if len(res_sortert) > 2 and res_sortert.at[2, "Totalt"] > 0:
+                        with pall_k3:
+                            st.warning(f"**🥉 3. plass**\n\n{res_sortert.at[2,'Navn']}\n\n**{int(res_sortert.at[2,'Totalt'])} poeng**")
+                    
+                    # ── FULL TABELL ───────────────────────────────────────────
+                    st.markdown("---")
                     st.markdown("### Hele poengtabellen")
-                    vis_kolonner = ["ID", "Navn", "Lag", "Kategori", "Kull", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
-                    st.dataframe(res_df[vis_kolonner], use_container_width=True, hide_index=True)
+                    # Legg til lag-ikon uten å endre rå data (vis-kopi)
+                    vis_df = res_sortert.copy()
+                    vis_df["Lag"] = vis_df["Lag"].apply(ikoniser_lag)
+                    vis_df.index = range(1, len(vis_df) + 1)
+                    vis_kolonner = ["Navn", "Lag", "Kategori", "Kull", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
+                    st.dataframe(vis_df[vis_kolonner], use_container_width=True)
 
         with poeng_fane3:
             st.subheader("⚔️ Lagsammenligning — Rød vs Gul")
@@ -1060,8 +1120,8 @@ elif side == "🎯 Poeng & Resultater":
                     lag_med_poeng[ov] = pd.to_numeric(lag_med_poeng[ov], errors='coerce').fillna(0)
                 lag_med_poeng["Totalt"] = lag_med_poeng["Øvelse 1"] + lag_med_poeng["Øvelse 2"] + lag_med_poeng["Øvelse 3"]
                 
-                rod_df = lag_med_poeng[lag_med_poeng["Lag"] == LAG_A]
-                gul_df = lag_med_poeng[lag_med_poeng["Lag"] == LAG_B]
+                rod_df = lag_med_poeng[lag_med_poeng["Lag"] == LAG_A].copy()
+                gul_df = lag_med_poeng[lag_med_poeng["Lag"] == LAG_B].copy()
                 rod_total, gul_total = int(rod_df["Totalt"].sum()), int(gul_df["Totalt"].sum())
                 rod_ov1, rod_ov2, rod_ov3 = int(rod_df["Øvelse 1"].sum()), int(rod_df["Øvelse 2"].sum()), int(rod_df["Øvelse 3"].sum())
                 gul_ov1, gul_ov2, gul_ov3 = int(gul_df["Øvelse 1"].sum()), int(gul_df["Øvelse 2"].sum()), int(gul_df["Øvelse 3"].sum())
