@@ -16,6 +16,41 @@ AVDELINGER = ["Ålesund", "Ulsteinvik", "Florø"]
 LAG_A = "Lag Rød"
 LAG_B = "Lag Gul"
 
+# Aldersgrupper for sportsfestivalen (slik dei er definert i programmet)
+KULL_GRUPPER = [
+    "2023",        # 3 år
+    "2022",        # 4 år
+    "2021",        # 5 år
+    "2020",        # 6 år
+    "2019-2018",   # 7-8 år
+    "2017-2016",   # 9-10 år
+    "2015-2014",   # 11-12 år
+    "2013-2012",   # 13-14 år
+    "2011-2010",   # 15-16 år
+    "2009-2008",   # 17-18 år
+]
+
+def kull_til_gruppe(kull):
+    """Konverter eit kull-felt (enten enkeltår eller gruppe) til gruppe-format."""
+    if not kull or not str(kull).strip():
+        return ""
+    kull_str = str(kull).strip()
+    if kull_str in KULL_GRUPPER:
+        return kull_str
+    try:
+        year = int(kull_str)
+        if year >= 2020:
+            return str(year)
+        elif year in (2019, 2018):  return "2019-2018"
+        elif year in (2017, 2016):  return "2017-2016"
+        elif year in (2015, 2014):  return "2015-2014"
+        elif year in (2013, 2012):  return "2013-2012"
+        elif year in (2011, 2010):  return "2011-2010"
+        elif year in (2009, 2008):  return "2009-2008"
+    except ValueError:
+        pass
+    return kull_str
+
 def ikoniser_lag(lagnavn):
     if lagnavn == LAG_A: return f"🔴 {LAG_A}"
     elif lagnavn == LAG_B: return f"🟡 {LAG_B}"
@@ -99,6 +134,8 @@ def last_inn_data():
             df["Kjønn"] = ""
         if "Avdeling" not in df.columns:
             df["Avdeling"] = "Ålesund"
+        # Migrer Kull frå enkeltår til gruppe-format
+        df["Kull"] = df["Kull"].apply(kull_til_gruppe)
         return df
     return pd.DataFrame(columns=st.session_state.kolonner)
 
@@ -199,7 +236,11 @@ if side == "📋 Registrering":
             
             kol1, kol2 = st.columns(2)
             with kol1:
-                kull = st.text_input("Fødselsår / Klasse (Kun for elever)")
+                kull = st.selectbox(
+                    "Kull / Aldersgruppe (Kun for elever)",
+                    [""] + KULL_GRUPPER,
+                    help="Velg aldersgruppen eleven tilhører"
+                )
             with kol2:
                 kjonn = st.selectbox("Kjønn (Kun for elever)", ["", "Gutt", "Jente"])
                 
@@ -237,7 +278,13 @@ if side == "📋 Registrering":
             
             kol_e1, kol_e2 = st.columns(2)
             with kol_e1:
-                oppdatert_kull = st.text_input("Fødselsår / Klasse", st.session_state.df.at[idx, "Kull"], disabled=(oppdatert_kat != "Elev"))
+                nv_kull = kull_til_gruppe(st.session_state.df.at[idx, "Kull"])
+                kull_alt = [""] + KULL_GRUPPER
+                kull_idx = kull_alt.index(nv_kull) if nv_kull in kull_alt else 0
+                oppdatert_kull = st.selectbox(
+                    "Kull / Aldersgruppe", kull_alt, index=kull_idx,
+                    disabled=(oppdatert_kat != "Elev")
+                )
             with kol_e2:
                 nåværende_kjønn = st.session_state.df.at[idx, "Kjønn"]
                 kjønn_index = 0
@@ -311,7 +358,7 @@ if side == "📋 Registrering":
                         importert_kat = rad.get("Kategori", "Elev")
                         importert_avd = rad.get("Avdeling", "Ålesund")
                         if importert_avd not in AVDELINGER: importert_avd = "Ålesund"
-                        importert_kull = rad.get("Kull", "") if importert_kat == "Elev" else ""
+                        importert_kull = kull_til_gruppe(rad.get("Kull", "")) if importert_kat == "Elev" else ""
                         importert_kjonn = rad.get("Kjønn", "") if importert_kat == "Elev" else ""
                         
                         midlertidig_rad = pd.DataFrame(
@@ -443,14 +490,16 @@ elif side == "🏁 Laginndeling":
     tilgang_fordel = har_tilgang("las_autofordel")
     
     st.markdown("### 🔍 Filtrer visning")
+    # Søkefelt øverst — for rask å finne person på namn
+    sok_navn = st.text_input("🔎 Søk på navn", placeholder="Skriv inn navn for å filtrere", key="lag_sok")
+    
     f_kol1, f_kol2, f_kol3, f_kol4 = st.columns(4)
     with f_kol1:
         f_avd = st.multiselect("Avdeling", AVDELINGER, default=AVDELINGER)
     with f_kol2:
         f_kat = st.multiselect("Kategori", KATEGORIER, default=["Elev"])
     with f_kol3:
-        unike_kull = sorted([k for k in st.session_state.df["Kull"].unique() if str(k).strip() != ""])
-        f_kull = st.multiselect("Kull", unike_kull, default=unike_kull)
+        f_kull = st.multiselect("Kull", KULL_GRUPPER, default=KULL_GRUPPER)
     with f_kol4:
         f_kjonn = st.multiselect("Kjønn", ["Gutt", "Jente", ""], default=["Gutt", "Jente", ""])
         
@@ -459,6 +508,8 @@ elif side == "🏁 Laginndeling":
     if f_kat: f_mask &= st.session_state.df["Kategori"].isin(f_kat)
     if f_kull: f_mask &= (st.session_state.df["Kull"].isin(f_kull) | (st.session_state.df["Kull"] == ""))
     if f_kjonn: f_mask &= st.session_state.df["Kjønn"].isin(f_kjonn)
+    if sok_navn.strip():
+        f_mask &= st.session_state.df["Navn"].str.contains(sok_navn.strip(), case=False, na=False)
     
     filtrert_df = st.session_state.df[f_mask]
     
@@ -486,7 +537,7 @@ elif side == "🏁 Laginndeling":
                             st.session_state.df.at[idx_val, "Lag"] = LAG_B
                             antall_b += 1
                             
-                loggfor_handling("Avansert Laginndeling", f"Balanserte {len(ufordelte_i_visning)} elever fra gjeldende filter.")
+                loggfor_handling("Avansert Laginndeling", f"Balanserte {len(ufordelte_i_visning)} deltakere fra gjeldende filter.")
                 lagre_alle_data()
                 st.success(f"Suksess! {len(ufordelte_i_visning)} personer ble balansert fordelt i lag.")
                 st.rerun()
@@ -494,8 +545,9 @@ elif side == "🏁 Laginndeling":
     with b_kol2:
         nullstill_tekst = "⚠️ Nullstill laginndeling" if tilgang_fordel else "⚠️ Nullstill lag (Admin)"
         if st.button(nullstill_tekst, disabled=not tilgang_fordel, use_container_width=True):
-            st.session_state.df.loc[st.session_state.df["Kategori"] == "Elev", "Lag"] = ""
-            loggfor_handling("Laginndeling", "Nullstilte lagtilhørighet for alle elever")
+            antall_nullstilt = len(st.session_state.df[st.session_state.df["Lag"] != ""])
+            st.session_state.df["Lag"] = ""
+            loggfor_handling("Laginndeling", f"Nullstilte lagtilhørighet for alle {antall_nullstilt} deltakere")
             lagre_alle_data()
             st.rerun()
 
@@ -547,8 +599,8 @@ elif side == "🏁 Laginndeling":
     with ut_k2:
         utskrift_kat = st.multiselect("Kategori", KATEGORIER, default=["Elev"], key="print_kat")
     with ut_k3:
-        alle_print_kull = sorted([k for k in st.session_state.df["Kull"].unique() if str(k).strip() != ""])
-        utskrift_kull = st.multiselect("Kull / Årskull", alle_print_kull, default=alle_print_kull, key="print_kull")
+        alle_print_kull = KULL_GRUPPER
+        utskrift_kull = st.multiselect("Kull / Aldersgruppe", alle_print_kull, default=alle_print_kull, key="print_kull")
     with ut_k4:
         sortering = st.selectbox("Sorter etter", ["Navn", "Kull", "Avdeling", "Kjønn", "ID"], key="print_sort")
     
@@ -602,30 +654,53 @@ body {{ font-family: 'Inter', 'Noto Sans Tamil', Helvetica, Arial, sans-serif; c
 .counts .n-yel {{ font-size: 28px; font-weight: 300; color: #c89000; letter-spacing: 1px; }}
 .counts .lbl {{ font-size: 7px; color: #aaa; text-transform: uppercase; letter-spacing: 1.5px; margin-top: 1px; }}
 
-.team-label {{
-    font-size: 11px;
+.team-section {{ page-break-inside: auto; }}
+.team-section:not(:first-of-type) {{ page-break-before: auto; }}
+table.data {{ width: 100%; border-collapse: collapse; margin-bottom: 18px; }}
+table.data thead {{ display: table-header-group; }}
+table.data tr {{ page-break-inside: avoid; }}
+table.data th.team-header-red {{
+    font-size: 13px;
     font-weight: 700;
     letter-spacing: 2px;
     text-transform: uppercase;
-    padding: 7px 0;
-    margin-top: 18px;
-    margin-bottom: 0;
-    border-bottom: 2px solid #111;
+    padding: 12px 4px 7px;
+    text-align: left;
+    border-bottom: 2px solid #c0392b;
+    color: #c0392b;
+    background: white;
 }}
-.team-label-red {{ color: #c0392b; border-color: #c0392b; }}
-.team-label-yel {{ color: #c89000; border-color: #c89000; }}
-.team-label span {{ font-weight: 300; font-size: 9px; color: #999; float: right; text-transform: none; letter-spacing: 0; margin-top: 2px; }}
-
-table.data {{ width: 100%; border-collapse: collapse; margin-bottom: 6px; }}
+table.data th.team-header-yel {{
+    font-size: 13px;
+    font-weight: 700;
+    letter-spacing: 2px;
+    text-transform: uppercase;
+    padding: 12px 4px 7px;
+    text-align: left;
+    border-bottom: 2px solid #c89000;
+    color: #c89000;
+    background: white;
+}}
+table.data th.team-header-red span,
+table.data th.team-header-yel span {{
+    font-weight: 300;
+    font-size: 10px;
+    color: #999;
+    float: right;
+    text-transform: none;
+    letter-spacing: 0;
+    margin-top: 4px;
+}}
 table.data th {{
     font-size: 7px;
     font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 1.2px;
     color: #999;
-    padding: 4px;
+    padding: 6px 4px 4px;
     text-align: left;
     border-bottom: 1px solid #ddd;
+    background: white;
 }}
 table.data td {{
     padding: 4px;
@@ -660,16 +735,25 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
 </tr></table>
 </div>
 
-<div class="team-label team-label-red">{LAG_A} <span>{len(df_a_print)} deltakere</span></div>
+<div class="team-label team-label-red" style="display:none"></div>
 <table class="data">
+<thead>
+<tr><th class="team-header-red" colspan="4">{LAG_A} <span>{len(df_a_print)} deltakere</span></th></tr>
 <tr><th>ID</th><th>Navn</th><th>Kull</th><th>Avdeling</th></tr>
+</thead>
+<tbody>
 {_rader(df_a_print)}
+</tbody>
 </table>
 
-<div class="team-label team-label-yel">{LAG_B} <span>{len(df_b_print)} deltakere</span></div>
 <table class="data">
+<thead>
+<tr><th class="team-header-yel" colspan="4">{LAG_B} <span>{len(df_b_print)} deltakere</span></th></tr>
 <tr><th>ID</th><th>Navn</th><th>Kull</th><th>Avdeling</th></tr>
+</thead>
+<tbody>
 {_rader(df_b_print)}
+</tbody>
 </table>
 
 <div class="footer">Sportsfestival Admin System</div>
@@ -697,14 +781,18 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
 
     l_kol1, l_kol2, l_kol3 = st.columns(3)
     
+    if not tilgang_fordel:
+        st.info("🔒 Flyttknappene er låst. Logg inn som admin for å flytte spillere.")
+
     with l_kol1:
         st.markdown(f"### 🔴 {LAG_A} ({len(df_rod)})")
         for _, r in df_rod.iterrows():
             c1, c2 = st.columns([4, 1])
             with c1:
-                st.text(f"{r['ID']} - {r['Navn']} ({r['Kull']})")
+                kull_vis = f" · {r['Kull']}" if r['Kull'] else ""
+                st.text(f"{r['ID']} - {r['Navn']}{kull_vis}")
             with c2:
-                if st.button("→🟡", key=f"rod_til_gul_{r['index']}"):
+                if st.button("→🟡", key=f"rod_til_gul_{r['index']}", disabled=not tilgang_fordel):
                     st.session_state.df.at[r["index"], "Lag"] = LAG_B
                     loggfor_handling("Flyttet", f"{r['Navn']} → {LAG_B}")
                     lagre_alle_data()
@@ -715,15 +803,16 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
         for _, r in df_ufordelt.iterrows():
             c1, c2, c3 = st.columns([1, 3, 1])
             with c1:
-                if st.button("🔴←", key=f"uf_til_rod_{r['index']}"):
+                if st.button("🔴←", key=f"uf_til_rod_{r['index']}", disabled=not tilgang_fordel):
                     st.session_state.df.at[r["index"], "Lag"] = LAG_A
                     loggfor_handling("Fordelt", f"{r['Navn']} → {LAG_A}")
                     lagre_alle_data()
                     st.rerun()
             with c2:
-                st.text(f"{r['ID']} - {r['Navn']}")
+                kull_vis = f" · {r['Kull']}" if r['Kull'] else ""
+                st.text(f"{r['ID']} - {r['Navn']}{kull_vis}")
             with c3:
-                if st.button("→🟡", key=f"uf_til_gul_{r['index']}"):
+                if st.button("→🟡", key=f"uf_til_gul_{r['index']}", disabled=not tilgang_fordel):
                     st.session_state.df.at[r["index"], "Lag"] = LAG_B
                     loggfor_handling("Fordelt", f"{r['Navn']} → {LAG_B}")
                     lagre_alle_data()
@@ -734,13 +823,14 @@ table.data td.navn {{ font-weight: 500; color: #111; }}
         for _, r in df_gul.iterrows():
             c1, c2 = st.columns([1, 4])
             with c1:
-                if st.button("🔴←", key=f"gul_til_rod_{r['index']}"):
+                if st.button("🔴←", key=f"gul_til_rod_{r['index']}", disabled=not tilgang_fordel):
                     st.session_state.df.at[r["index"], "Lag"] = LAG_A
                     loggfor_handling("Flyttet", f"{r['Navn']} → {LAG_A}")
                     lagre_alle_data()
                     st.rerun()
             with c2:
-                st.text(f"{r['ID']} - {r['Navn']} ({r['Kull']})")
+                kull_vis = f" · {r['Kull']}" if r['Kull'] else ""
+                st.text(f"{r['ID']} - {r['Navn']}{kull_vis}")
 
     st.markdown("---")
     st.subheader("Fjern fra lag")
@@ -775,17 +865,19 @@ elif side == "🎯 Poeng & Resultater":
         ])
         
         alle_deltakere_df = st.session_state.df.copy()
-        alle_kull = sorted([k for k in alle_deltakere_df["Kull"].unique() if str(k).strip() != ""])
 
         with poeng_fane1:
             st.subheader("Registrer poeng for øvelser")
             st.write("Huk av «Nullstill poeng ⚠️» for å slette poengene til en enkelt deltaker.")
             
+            # Søkefelt øverst — over kategori-menyen
+            sok_poeng = st.text_input("🔎 Søk på navn", placeholder="Skriv inn navn for å filtrere", key="poeng_sok")
+            
             p_kol1, p_kol2, p_kol3 = st.columns(3)
             with p_kol1:
                 poeng_kat = st.selectbox("Kategori", ["Alle"] + KATEGORIER, key="poeng_kat")
             with p_kol2:
-                valgt_kull = st.selectbox("Kull (valgfritt)", ["Alle"] + alle_kull, key="poeng_kull")
+                valgt_kull = st.selectbox("Kull / Aldersgruppe (valgfritt)", ["Alle"] + KULL_GRUPPER, key="poeng_kull")
             with p_kol3:
                 valgt_kjonn = st.selectbox("Kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="poeng_kjonn")
             
@@ -796,24 +888,27 @@ elif side == "🎯 Poeng & Resultater":
                 poeng_mask &= alle_deltakere_df["Kull"] == valgt_kull
             if valgt_kjonn != "Alle":
                 poeng_mask &= alle_deltakere_df["Kjønn"] == valgt_kjonn
+            if sok_poeng.strip():
+                poeng_mask &= alle_deltakere_df["Navn"].str.contains(sok_poeng.strip(), case=False, na=False)
             
-            aktuelle = alle_deltakere_df[poeng_mask][["ID", "Navn", "Kategori", "Kjønn", "Lag"]].copy()
+            aktuelle = alle_deltakere_df[poeng_mask][["ID", "Navn", "Kategori", "Kull", "Kjønn", "Lag"]].copy()
             
-            if poeng_kat == "Alle" and valgt_kull == "Alle":
-                st.info("Velg minst en kategori eller et kull for å føre inn poeng.")
+            if poeng_kat == "Alle" and valgt_kull == "Alle" and not sok_poeng.strip():
+                st.info("Velg minst en kategori, et kull, eller søk på navn for å føre inn poeng.")
             elif aktuelle.empty:
                 st.info("Ingen deltakere matcher det valgte filteret.")
             else:
                 redigerings_df = pd.merge(aktuelle, st.session_state.poeng_df, on="ID", how="left").fillna("0")
                 redigerings_df["Kjønn"] = redigerings_df["Kjønn"].replace("0", "")
                 redigerings_df["Kategori"] = redigerings_df["Kategori"].replace("0", "")
+                redigerings_df["Kull"] = redigerings_df["Kull"].replace("0", "")
                 
                 # Fargekode lagvisning
                 redigerings_df["Lag"] = redigerings_df["Lag"].fillna("").apply(ikoniser_lag)
                 redigerings_df["Nullstill"] = False
                 
                 # Sorter kolonnene for en bedre visning i editoren
-                redigerings_df = redigerings_df[["ID", "Navn", "Lag", "Kategori", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Nullstill"]]
+                redigerings_df = redigerings_df[["ID", "Navn", "Lag", "Kategori", "Kull", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Nullstill"]]
                 
                 redigert_data = st.data_editor(
                     redigerings_df,
@@ -822,6 +917,7 @@ elif side == "🎯 Poeng & Resultater":
                         "Navn": st.column_config.TextColumn("Navn", disabled=True),
                         "Lag": st.column_config.TextColumn("Lag", disabled=True, width="small"),
                         "Kategori": st.column_config.TextColumn("Kategori", disabled=True, width="small"),
+                        "Kull": st.column_config.TextColumn("Kull", disabled=True, width="small"),
                         "Kjønn": st.column_config.SelectboxColumn("Kjønn", options=["", "Gutt", "Jente"], width="small"),
                         "Øvelse 1": st.column_config.TextColumn("Øvelse 1", width="small"),
                         "Øvelse 2": st.column_config.TextColumn("Øvelse 2", width="small"),
@@ -892,7 +988,7 @@ elif side == "🎯 Poeng & Resultater":
             with r_kol1:
                 res_kat = st.selectbox("Kategori", ["Alle"] + KATEGORIER, key="res_kat")
             with r_kol2:
-                res_kull = st.selectbox("Kull", ["Alle"] + alle_kull, key="res_kull")
+                res_kull = st.selectbox("Kull / Aldersgruppe", ["Alle"] + KULL_GRUPPER, key="res_kull")
             with r_kol3:
                 res_kjonn = st.selectbox("Kjønn (valgfritt)", ["Alle", "Gutt", "Jente"], key="res_kjonn")
             
@@ -907,11 +1003,12 @@ elif side == "🎯 Poeng & Resultater":
                 if res_kjonn != "Alle":
                     res_mask &= alle_deltakere_df["Kjønn"] == res_kjonn
                 
-                aktuelle_res = alle_deltakere_df[res_mask][["ID", "Navn", "Kategori", "Kjønn", "Lag"]]
+                aktuelle_res = alle_deltakere_df[res_mask][["ID", "Navn", "Kategori", "Kull", "Kjønn", "Lag"]]
                 
                 res_df = pd.merge(aktuelle_res, st.session_state.poeng_df, on="ID", how="left").fillna("0")
                 res_df["Kjønn"] = res_df["Kjønn"].replace("0", "")
                 res_df["Kategori"] = res_df["Kategori"].replace("0", "")
+                res_df["Kull"] = res_df["Kull"].replace("0", "")
                 
                 # Fargekode lagvisning
                 res_df["Lag"] = res_df["Lag"].fillna("").apply(ikoniser_lag)
@@ -937,7 +1034,7 @@ elif side == "🎯 Poeng & Resultater":
                             st.warning(f"**🥉 3. plass**\n\n{res_df.at[2, 'Navn']} ({int(res_df.at[2, 'Totalt'])} poeng)")
                     
                     st.markdown("### Hele poengtabellen")
-                    vis_kolonner = ["ID", "Navn", "Lag", "Kategori", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
+                    vis_kolonner = ["ID", "Navn", "Lag", "Kategori", "Kull", "Kjønn", "Øvelse 1", "Øvelse 2", "Øvelse 3", "Totalt"]
                     st.dataframe(res_df[vis_kolonner], use_container_width=True, hide_index=True)
 
         with poeng_fane3:
