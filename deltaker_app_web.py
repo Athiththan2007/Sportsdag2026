@@ -885,7 +885,11 @@ elif side == "🎯 Poeng & Resultater":
             if poeng_kat != "Alle":
                 poeng_mask &= alle_deltakere_df["Kategori"] == poeng_kat
             if valgt_kull != "Alle":
-                poeng_mask &= alle_deltakere_df["Kull"] == valgt_kull
+                if "-" in valgt_kull:
+                    aar = valgt_kull.split("-")
+                    poeng_mask &= alle_deltakere_df["Kull"].isin([valgt_kull, aar[0], aar[1]])
+                else:
+                    poeng_mask &= alle_deltakere_df["Kull"] == valgt_kull
             if valgt_kjonn != "Alle":
                 poeng_mask &= alle_deltakere_df["Kjønn"] == valgt_kjonn
             if sok_poeng.strip():
@@ -999,7 +1003,11 @@ elif side == "🎯 Poeng & Resultater":
                 if res_kat != "Alle":
                     res_mask &= alle_deltakere_df["Kategori"] == res_kat
                 if res_kull != "Alle":
-                    res_mask &= alle_deltakere_df["Kull"] == res_kull
+                    if "-" in res_kull:
+                        aar = res_kull.split("-")
+                        res_mask &= alle_deltakere_df["Kull"].isin([res_kull, aar[0], aar[1]])
+                    else:
+                        res_mask &= alle_deltakere_df["Kull"] == res_kull
                 if res_kjonn != "Alle":
                     res_mask &= alle_deltakere_df["Kjønn"] == res_kjonn
                 
