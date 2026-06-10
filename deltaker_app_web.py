@@ -1140,12 +1140,15 @@ elif side == "🎯 Poeng & Resultater":
                 if res_df.empty or res_df["Totalt"].sum() == 0:
                     st.info("Ingen poeng registrert for denne gruppen ennå.")
                 else:
-                    # ── CHAMPION ─────────────────────────────────────────────
+                    # ── CHAMPION (kun om det er ein eintydig leiar) ──────────────
                     res_sortert = res_df.sort_values(by="Totalt", ascending=False).reset_index(drop=True)
-                    champion = res_sortert.iloc[0]
+                    topp_poeng = res_sortert.iloc[0]["Totalt"]
+                    antall_paa_topp = len(res_sortert[res_sortert["Totalt"] == topp_poeng])
                     
                     st.markdown("---")
-                    st.markdown(f"""
+                    if antall_paa_topp == 1:
+                        champion = res_sortert.iloc[0]
+                        st.markdown(f"""
 <div style="background:linear-gradient(135deg,#1a3a5c,#2e75b6);border-radius:12px;padding:20px 28px;margin-bottom:20px;text-align:center">
 <div style="font-size:36px">🏆</div>
 <div style="color:#FFD700;font-size:22px;font-weight:700;letter-spacing:1px">CHAMPION</div>
@@ -1153,8 +1156,18 @@ elif side == "🎯 Poeng & Resultater":
 <div style="color:#aaa;font-size:14px">{int(champion['Totalt'])} poeng totalt · {champion['Kull']} · {champion['Lag']}</div>
 </div>
 """, unsafe_allow_html=True)
+                    else:
+                        delte_navn = ", ".join(res_sortert[res_sortert["Totalt"] == topp_poeng]["Navn"].tolist())
+                        st.markdown(f"""
+<div style="background:linear-gradient(135deg,#3a3a3a,#5a5a5a);border-radius:12px;padding:20px 28px;margin-bottom:20px;text-align:center">
+<div style="font-size:36px">⚖️</div>
+<div style="color:#ddd;font-size:22px;font-weight:700;letter-spacing:1px">INGEN CHAMPION — DELT LEDELSE</div>
+<div style="color:white;font-size:18px;font-weight:600;margin:6px 0">{delte_navn}</div>
+<div style="color:#aaa;font-size:14px">{int(topp_poeng)} poeng hver — kåring krever en eintydig leder</div>
+</div>
+""", unsafe_allow_html=True)
                     
-                    # ── VINNERE PER ØVELSE ────────────────────────────────────
+                    # ── VINNERE PER ØVELSE (med delt plassering) ─────────────────
                     st.markdown("### 🥇 Vinnere per øvelse")
                     ov_kol1, ov_kol2, ov_kol3 = st.columns(3)
                     OVELSE_NAMN = ["Øvelse 1", "Øvelse 2", "Øvelse 3"]
@@ -1171,15 +1184,20 @@ elif side == "🎯 Poeng & Resultater":
                             if ov_sortert.empty:
                                 st.caption("Ingen poeng ennå")
                             else:
-                                medaljer = ["🥇", "🥈", "🥉"]
-                                for i, (_, row) in enumerate(ov_sortert.head(3).iterrows()):
-                                    plass = medaljer[i] if i < 3 else f"{i+1}."
-                                    poeng = int(row[ov_namn])
+                                ov_sortert["_rank"] = ov_sortert[ov_namn].rank(method="min", ascending=False).astype(int)
+                                medaljer = {1: "🥇", 2: "🥈", 3: "🥉"}
+                                # Vis topp 3 plassar (kan inneholde fleire navn pr plass ved delt)
+                                vis_rank = ov_sortert[ov_sortert["_rank"] <= 3]
+                                for rank_val, gruppe in vis_rank.groupby("_rank"):
+                                    plass = medaljer.get(rank_val, f"{rank_val}.")
+                                    poeng = int(gruppe.iloc[0][ov_namn])
+                                    navn_liste = ", ".join(gruppe["Navn"].tolist())
+                                    delt_tekst = " (delt)" if len(gruppe) > 1 else ""
                                     st.markdown(
                                         f"<div style='padding:6px 10px;margin:3px 0;border-radius:8px;"
                                         f"background:{farge}18;border-left:3px solid {farge}'>"
                                         f"<span style='font-size:16px'>{plass}</span> "
-                                        f"<strong>{row['Navn']}</strong> "
+                                        f"<strong>{navn_liste}</strong>{delt_tekst} "
                                         f"<span style='color:#888;font-size:12px'>({poeng} p)</span>"
                                         f"</div>",
                                         unsafe_allow_html=True
